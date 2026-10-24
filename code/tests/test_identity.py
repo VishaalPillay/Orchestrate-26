@@ -208,3 +208,52 @@ def test_resource_first_seen_after_audit_is_not_pulled_in(tmp_path):
         CASE, "user_1", _closure_for(tmp_path), store, LineageGraph([row])
     )
     assert [a.resource_id for a in accepted] == ["account_new"]
+
+
+# --- activity_joint: accounts linked only by a deletion_worker row -----------------------------------
+
+
+def _joint_setup(tmp_path: Path, extra_case: bool):
+    from pcda.facts import FactStore
+    from pcda.identity import JointActivityAttribution
+
+    users = ["a", "b", "c", "d"]
+    (tmp_path / "i.csv").write_text(
+        "user_id,name,email,phone,email_hash,updated_at\n"
+        + "".join(f"user_{u},{u},{u}@example.com,,,2025-01-01T00:00:00Z\n" for u in users),
+        encoding="utf-8",
+    )
+    (tmp_path / "a.csv").write_text("audit_id,user_id,event_time,field_name,old_value,new_value\n", encoding="utf-8")
+    closure = IdentityClosure.from_csvs(tmp_path / "i.csv", tmp_path / "a.csv")
+
+    def case(cid: str, user: str, status: str) -> CaseRequest:
+        return CaseRequest(cid, f"{user}@example.com", parse_ts("2026-09-04T12:00:00Z"), status, REPORTED,
+                           parse_ts("2026-09-15T12:00:00Z"), "delete me")
+
+    def row(n: int, minutes: float, rid: str, result: str) -> Claim:
+        return Claim(f"activity_{n}", REPORTED + timedelta(minutes=minutes), "DELETE_RECORD", "deletion_worker",
+                     "account_service", rid, result, "")
+
+    claims = [row(1, -50, "account_1", "SUCCESS"), row(2, -60, "account_2", "FAILED"),
+              row(3, -40, "account_3", "SUCCESS")]
+    # account_3 belongs to user_c by identifier evidence; nobody else may take it.
+    store = FactStore([_fact("evidence_x:1", "account_3", "2026-09-05T10:00:00Z", "2026-09-05T10:00:00Z",
+                             ident="c@example.com")])
+    cases = [case("case_a", "a", "COMPLETE"), case("case_b", "b", "NOT_STARTED"), case("case_c", "c", "COMPLETE")]
+    if extra_case:
+        cases.append(case("case_d", "d", "COMPLETE"))
+    return JointActivityAttribution.build(cases, closure, store, LineageGraph(claims))
+
+
+def test_activity_joint_assigns_by_status_result_and_elimination(tmp_path):
+    joint = _joint_setup(tmp_path, extra_case=False)
+    assert {cid: a.resource_id for cid, a in joint.assigned.items()} == {"case_a": "account_1", "case_b": "account_2"}
+    assert all(a.tier == LinkTier.ACTIVITY_JOINT and a.needs_skeptic for a in joint.assigned.values())
+    assert joint.assigned["case_a"].evidence_ids == ("activity_1",)
+
+
+def test_activity_joint_refuses_an_account_two_cases_would_claim(tmp_path):
+    joint = _joint_setup(tmp_path, extra_case=True)
+    assert "case_a" not in joint.assigned and "case_d" not in joint.assigned
+    assert "also the only candidate" in joint.rejected["case_a"]
+    assert joint.assigned["case_b"].resource_id == "account_2"

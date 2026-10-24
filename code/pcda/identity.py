@@ -71,6 +71,7 @@ class LinkTier(IntEnum):
     CATALOG_LINK = 3
     LOG_TRACE = 4
     ACTIVITY_TEMPORAL = 5
+    ACTIVITY_JOINT = 6
 
 
 # Fact origin kind (ATTR_SRC, stamped by the adapters) -> tier.
@@ -444,3 +445,141 @@ class ResourceAttribution:
                 )
             )
         return out
+
+
+# The workflow's reported_status is its own summary of the account deletion
+# it submitted: in all 21 sample cases with an account row in the window, the
+# deletion_worker DELETE_RECORD result matches it one to one.
+REPORTED_STATUS_RESULT: Final[dict[str, str]] = {
+    "COMPLETE": "SUCCESS",
+    "PARTIALLY_COMPLETE": "PARTIAL",
+    "NOT_STARTED": "FAILED",
+}
+ACCOUNT_SYSTEM: Final = "account_service"
+
+
+class JointActivityAttribution:
+    """Lowest tier: accounts linked only by a deletion_worker DELETE_RECORD row.
+
+    Applies to a case with no account_service attribution at all. Candidates
+    are DELETE_RECORD rows from deletion_worker to account_service with
+      (a) requested_at <= event_time <= min(reported_at, audit_at);
+      (b) reported_result consistent with the case's reported_status;
+      (c) no identifier evidence tying the account to another user;
+      (d) the account not attributed to any request by a stronger tier.
+    Then one row belongs to at most one request: a candidate that another
+    request holds as its only candidate is removed, to a fixpoint, over every
+    request (sample and evaluation together, so the answer for a case never
+    depends on which split is run). A case keeps its account only if exactly
+    one candidate remains and no other case also ends with it.
+
+    Measured on the 32 samples: 11 accepted, 11 correct (6 beyond
+    activity_temporal). Every result goes to the skeptic. Resource ids are
+    taken from the rows, never inferred from naming patterns.
+    """
+
+    def __init__(self, assigned: dict[str, AttributedResource], rejected: dict[str, str]) -> None:
+        self.assigned = assigned  # case_id -> account
+        self.rejected = rejected  # case_id -> why no account was assigned
+
+    @classmethod
+    def build(
+        cls,
+        cases: list[CaseRequest],
+        closure: IdentityClosure,
+        store: FactStore,
+        lineage: LineageGraph,
+    ) -> JointActivityAttribution:
+        owners: dict[str, set[str]] = defaultdict(set)
+        for f in store:
+            if f.resource_id is None:
+                continue
+            target = f.attrs[ATTR_LINKED] if f.attrs.get("via") == "source_resource_id" else f.resource_id
+            for ident in f.identifiers:
+                user = closure.subject_of(ident)
+                if user is not None:
+                    owners[target].add(user)
+        deletes = [
+            c
+            for c in lineage.claims
+            if c.source_system == "deletion_worker"
+            and c.event_type == "DELETE_RECORD"
+            and c.target_system == ACCOUNT_SYSTEM
+        ]
+
+        strong_owned: set[str] = set()
+        held: dict[str, str] = {}  # case_id -> account already attributed through activity_temporal
+        open_cases: dict[str, tuple[CaseRequest, str]] = {}
+        for case in cases:
+            user = closure.subject_of(case.email)
+            if user is None:
+                continue
+            accounts = [
+                a
+                for a in ResourceAttribution.for_case(case, user, closure, store, lineage)
+                if a.system_id == ACCOUNT_SYSTEM
+            ]
+            strong_owned |= {a.resource_id for a in accounts if not a.needs_skeptic}
+            if any(not a.needs_skeptic for a in accounts):
+                continue
+            if accounts:
+                held[case.case_id] = accounts[0].resource_id
+            else:
+                open_cases[case.case_id] = (case, user)
+
+        cands: dict[str, set[str]] = {cid: {acc} for cid, acc in held.items()}
+        evidence: dict[str, Claim] = {}
+        for cid, (case, user) in open_cases.items():
+            until = min(case.reported_at, case.audit_at)
+            want = REPORTED_STATUS_RESULT.get(case.reported_status)
+            found: set[str] = set()
+            for c in deletes:
+                if not (case.requested_at <= c.event_time <= until) or c.reported_result != want:
+                    continue
+                if owners.get(c.resource_id, set()) - {user} or c.resource_id in strong_owned:
+                    continue
+                found.add(c.resource_id)
+                evidence[c.resource_id] = c
+            cands[cid] = found
+
+        changed = True
+        while changed:
+            changed = False
+            fixed = {cid: next(iter(s)) for cid, s in cands.items() if len(s) == 1}
+            for cid, s in cands.items():
+                if len(s) > 1:
+                    drop = {acc for other, acc in fixed.items() if other != cid and acc in s}
+                    if drop:
+                        s -= drop
+                        changed = True
+
+        claimants: dict[str, list[str]] = defaultdict(list)
+        for cid, s in cands.items():
+            if len(s) == 1:
+                claimants[next(iter(s))].append(cid)
+        assigned: dict[str, AttributedResource] = {}
+        rejected: dict[str, str] = {}
+        for cid in sorted(open_cases):
+            s = cands[cid]
+            if len(s) != 1:
+                rejected[cid] = f"{len(s)} candidate account rows remain"
+                continue
+            (acc,) = s
+            if len(claimants[acc]) > 1:
+                rejected[cid] = f"{acc} is also the only candidate of {sorted(set(claimants[acc]) - {cid})}"
+                continue
+            case = open_cases[cid][0]
+            c = evidence[acc]
+            assigned[cid] = AttributedResource(
+                resource_id=acc,
+                system_id=ACCOUNT_SYSTEM,
+                tier=LinkTier.ACTIVITY_JOINT,
+                reasons=(
+                    f"activity_joint: {c.activity_id} deletion_worker DELETE_RECORD {c.reported_result} "
+                    f"{(c.event_time - case.reported_at).total_seconds() / 60:+.1f} min from reported_at, "
+                    f"consistent with reported_status {case.reported_status}; sole remaining candidate",
+                ),
+                evidence_ids=(c.activity_id,),
+                needs_skeptic=True,
+            )
+        return cls(assigned, rejected)

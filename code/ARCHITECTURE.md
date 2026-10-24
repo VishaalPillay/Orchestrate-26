@@ -68,7 +68,7 @@ Attribution reads the full store and everything after it reads `as_of(audit_at)`
 | `cases.py` | `CaseRequest` loader, the split definitions, and the evidence-id clock (manifest, activity and audit times). |
 | `facts.py` | `FactKind`, `Fact` (frozen, equality and hash on `fact_id`) and `FactStore`. `as_of(t)` requires `captured_at <= t` and `observed_at <= t`. |
 | `category.py` | `CategoryResolver`: a static `(name, signal)` map, plus an LLM fallback limited to the 15 categories and cached per name. |
-| `identity.py` | Normalizers, `IdentityClosure` (a global union-find over identifiers, exact matches only; an identifier claimed by two users is never unioned) and `ResourceAttribution` (per case, by tier, with a staleness gate, a post-audit guardrail and a gated `activity_temporal`). |
+| `identity.py` | Normalizers, `IdentityClosure` (a global union-find over identifiers, exact matches only; an identifier claimed by two users is never unioned) and `ResourceAttribution` (per case, by tier, with a staleness gate, a post-audit guardrail and a gated `activity_temporal`), and `JointActivityAttribution`: the lowest tier, `activity_joint`, for accounts linked only by a deletion_worker DELETE_RECORD row (status/result consistency, elimination of other users' accounts, one row per request across all 550 requests; contested accounts are refused). |
 | `lineage.py` | `Claim` and `LineageGraph`: active flows at t, reachability, and `affects()` for the validator. |
 | `policy.py` | `ObligationTemplate` and `compile_rules`. BACKUP_ARCHIVE maps to BLOCKED, and there is an implicit DATA_FLOW → DISABLED template. |
 | `solver.py` | `Obligation`, `ObligationStatus`, `Certificate`, `Verdict`, and `solve()`. |
