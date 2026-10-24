@@ -10,11 +10,12 @@ template whose required state is DISABLED.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from pcda.category import DATA_FLOW
+from pcda.category import CATEGORIES, DATA_FLOW
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,35 @@ IMPLICIT_TEMPLATES: Final[tuple[ObligationTemplate, ...]] = (
 )
 
 
+# ACCOUNT_TOMBSTONE keeps the stable user_id and loses every direct identifier.
+# user_N is a reference, never counted in a fact's pii_fields, so any populated
+# pii field on a tombstone row is a violation.
+TOMBSTONE_REDACT_FIELDS: Final[frozenset[str]] = frozenset({"name", "email", "phone", "email_hash"})
+
+
 def compile_rules(path: Path) -> dict[str, ObligationTemplate]:
     """category -> template, including IMPLICIT_TEMPLATES."""
-    raise NotImplementedError("policy.compile_rules")
+    templates: dict[str, ObligationTemplate] = {}
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            category = row["data_category"].strip()
+            action = row["required_action"].strip().upper()
+            if action not in ACTION_TO_STATE:
+                raise ValueError(f"{row['rule_id']}: unknown action {action!r}")
+            if category in templates:
+                raise ValueError(f"{row['rule_id']}: second rule for {category}")
+            state, verify = CATEGORY_STATE_OVERRIDES.get(category, ACTION_TO_STATE[action])
+            templates[category] = ObligationTemplate(
+                rule_id=row["rule_id"].strip(),
+                category=category,
+                condition=row["condition"].strip(),
+                action=action,
+                required_state=state,
+                verify_operation=verify,
+            )
+    missing = set(CATEGORIES) - set(templates)
+    if missing:
+        raise ValueError(f"deletion_rules.csv has no rule for {sorted(missing)}")
+    for t in IMPLICIT_TEMPLATES:
+        templates[t.category] = t
+    return templates

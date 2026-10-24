@@ -29,6 +29,16 @@ class SkepticAgent(Protocol):
     ) -> list[Objection]: ...
 
 
+class NullSkepticAgent:
+    """Deterministic mode: raises no objection. Attributions that need the
+    skeptic are flagged by the pipeline instead (skeptic_pending)."""
+
+    def challenge(
+        self, certificate: Certificate, attributions: list[AttributedResource]
+    ) -> list[Objection]:
+        return []
+
+
 class LLMSkepticAgent:
     def __init__(self, client: LLMClient) -> None:
         self._client = client
