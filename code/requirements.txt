@@ -1,0 +1,4 @@
+python-dotenv==1.2.4
+pymupdf==2.0
+google-genai==2.33.0
+groq==1.7.0

@@ -1,3 +1,5 @@
 .env
 /.venv
 log.txt
+code/.cache/
+__pycache__/
