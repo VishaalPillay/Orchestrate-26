@@ -489,7 +489,13 @@ class JointActivityAttribution:
         closure: IdentityClosure,
         store: FactStore,
         lineage: LineageGraph,
+        *,
+        event_type: str = "DELETE_RECORD",
+        target_system: str = ACCOUNT_SYSTEM,
     ) -> JointActivityAttribution:
+        """The same rule for any (event_type, target_system): accounts use
+        DELETE_RECORD on account_service; analytics rows ANONYMIZE_RECORD on
+        analytics_platform."""
         owners: dict[str, set[str]] = defaultdict(set)
         for f in store:
             if f.resource_id is None:
@@ -503,8 +509,8 @@ class JointActivityAttribution:
             c
             for c in lineage.claims
             if c.source_system == "deletion_worker"
-            and c.event_type == "DELETE_RECORD"
-            and c.target_system == ACCOUNT_SYSTEM
+            and c.event_type == event_type
+            and c.target_system == target_system
         ]
 
         strong_owned: set[str] = set()
@@ -517,7 +523,7 @@ class JointActivityAttribution:
             accounts = [
                 a
                 for a in ResourceAttribution.for_case(case, user, closure, store, lineage)
-                if a.system_id == ACCOUNT_SYSTEM
+                if a.system_id == target_system
             ]
             strong_owned |= {a.resource_id for a in accounts if not a.needs_skeptic}
             if any(not a.needs_skeptic for a in accounts):
@@ -562,7 +568,7 @@ class JointActivityAttribution:
         for cid in sorted(open_cases):
             s = cands[cid]
             if len(s) != 1:
-                rejected[cid] = f"{len(s)} candidate account rows remain"
+                rejected[cid] = f"{len(s)} candidate rows remain"
                 continue
             (acc,) = s
             if len(claimants[acc]) > 1:
@@ -572,10 +578,10 @@ class JointActivityAttribution:
             c = evidence[acc]
             assigned[cid] = AttributedResource(
                 resource_id=acc,
-                system_id=ACCOUNT_SYSTEM,
+                system_id=target_system,
                 tier=LinkTier.ACTIVITY_JOINT,
                 reasons=(
-                    f"activity_joint: {c.activity_id} deletion_worker DELETE_RECORD {c.reported_result} "
+                    f"activity_joint: {c.activity_id} deletion_worker {event_type} {c.reported_result} "
                     f"{(c.event_time - case.reported_at).total_seconds() / 60:+.1f} min from reported_at, "
                     f"consistent with reported_status {case.reported_status}; sole remaining candidate",
                 ),

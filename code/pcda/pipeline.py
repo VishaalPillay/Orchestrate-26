@@ -34,6 +34,13 @@ from pcda.policy import ObligationTemplate, compile_rules
 from pcda.solver import Certificate, ObligationStatus, Verdict, solve
 
 
+# Activity rows that may link a resource to a request when nothing else does.
+JOINT_PASSES: tuple[tuple[str, str], ...] = (
+    ("DELETE_RECORD", "account_service"),
+    ("ANONYMIZE_RECORD", "analytics_platform"),
+)
+
+
 @dataclass
 class Context:
     mode: RunMode
@@ -47,7 +54,8 @@ class Context:
     intake: IntakeAgent
     skeptic: SkepticAgent
     canonical: dict[str, SystemVote] = field(default_factory=dict)
-    joint: JointActivityAttribution = field(default_factory=lambda: JointActivityAttribution({}, {}))
+    # One joint pass per (event_type, target_system); see JOINT_PASSES.
+    joint: tuple[JointActivityAttribution, ...] = ()
     report: IngestReport = field(default_factory=IngestReport)
 
 
@@ -72,7 +80,10 @@ def build_context(mode: RunMode) -> Context:
     deterministic = mode is RunMode.DETERMINISTIC
     # Built over every request in both files, so a case's answer never depends on --split.
     every_case = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
-    joint = JointActivityAttribution.build(every_case, closure, store, lineage)
+    joint = tuple(
+        JointActivityAttribution.build(every_case, closure, store, lineage, event_type=e, target_system=t)
+        for e, t in JOINT_PASSES
+    )
     return Context(
         mode=mode,
         llm=llm,
@@ -139,11 +150,12 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
         if subject is not None
         else []
     )
-    joint = ctx.joint.assigned.get(case.case_id)
-    if joint is not None and not any(a.resource_id == joint.resource_id for a in attributions):
-        attributions.append(joint)
-    elif case.case_id in ctx.joint.rejected:
-        flags.append(f"joint_account_none:{ctx.joint.rejected[case.case_id]}")
+    for (_, system), joint_pass in zip(JOINT_PASSES, ctx.joint):
+        joint = joint_pass.assigned.get(case.case_id)
+        if joint is not None and not any(a.resource_id == joint.resource_id for a in attributions):
+            attributions.append(joint)
+        elif case.case_id in joint_pass.rejected:
+            flags.append(f"joint_none:{system}:{joint_pass.rejected[case.case_id]}")
     attributions, system_flags = canonicalize(attributions, ctx)
     flags.extend(system_flags)
 
