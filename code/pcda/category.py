@@ -105,14 +105,45 @@ _ACTIVITY_TARGETS: Final[dict[str, str]] = {
     "marketing_platform": "MARKETING_PROFILE",
 }
 
+# Names whose category is never stated anywhere and was inferred by reading the
+# evidence (plus, where noted, the sample gold that fixed the rule's action).
+# Kept apart so a later run can remove them and test whether the LLM category
+# fallback recovers them on its own.
+INFERRED_FROM_EVIDENCE: Final[dict[tuple[str, str], tuple[str, str]]] = {
+    # case_12, evidence_01: "event=contact_lookup_completed ... email_opt_in=true" in
+    # analytics_platform. The marketing console screen shows "Email opt-in" as a
+    # marketing attribute; gold deletes analytics_9914 (ANALYTICS_PROFILE would anonymize).
+    ("contact_lookup_completed", "email_opt_in"): (
+        "MARKETING_PROFILE",
+        "contact lookup carrying a marketing opt-in; gold case_12 DELETE",
+    ),
+    # case_10, evidence_61 (support_replica.log, the only file with these events): the
+    # batch reads source=legacy_contact_index; contact_query_started looks a contact up
+    # by email (lookup_key=<old yahoo address>) and contact_query_completed returns
+    # resource_id=support_002 rows=1. The record maps an email to a support record: an
+    # identifier entry, not a conversation (SUPPORT_MESSAGE would REDACT) and not a file
+    # (SUPPORT_ATTACHMENT). Gold case_10 deletes support_002, matching rule_02
+    # SECONDARY_IDENTIFIER (Always, DELETE).
+    ("contact_query_completed", ""): (
+        "SECONDARY_IDENTIFIER",
+        "legacy contact-index entry keyed by email; gold case_10 DELETE",
+    ),
+    # Same file: deletion_marker_check resource_id=support_002 marker_found=false
+    # last_write=2026-09-07 is the replica checking that same index entry for a
+    # deletion marker; it names the same record, so the same category.
+    ("deletion_marker_check", ""): (
+        "SECONDARY_IDENTIFIER",
+        "deletion-marker probe of the contact-index entry; gold case_10 DELETE",
+    ),
+}
+
 # (name, signal) -> category. signal "" means "no qualifying field".
 STATIC_MAP: Final[dict[tuple[str, str], str]] = {
     **{(c, ""): c for c in CATEGORIES},
     (DATA_FLOW, ""): DATA_FLOW,
     **{(name, ""): cat for cat, names in _NAMES.items() for name in names},
     **{(f"activity:{system}", ""): cat for system, cat in _ACTIVITY_TARGETS.items()},
-    # case_12: a contact lookup that carries a marketing opt-in is a marketing profile.
-    ("contact_lookup_completed", "email_opt_in"): "MARKETING_PROFILE",
+    **{key: cat for key, (cat, _) in INFERRED_FROM_EVIDENCE.items()},
 }
 
 # Attribute keys that act as signals when present on a fact.
