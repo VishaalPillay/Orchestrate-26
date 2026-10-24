@@ -9,9 +9,12 @@ order steps; the planner's canonical key does, and the validator uses
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from pcda.facts import parse_ts
 
 
 @dataclass(frozen=True)
@@ -32,14 +35,28 @@ class LineageGraph:
 
     @classmethod
     def from_csv(cls, path: Path) -> LineageGraph:
-        raise NotImplementedError("lineage.LineageGraph.from_csv")
+        with path.open(encoding="utf-8", newline="") as fh:
+            claims = [
+                Claim(
+                    activity_id=r["activity_id"],
+                    event_time=parse_ts(r["event_time"]),
+                    event_type=r["event_type"],
+                    source_system=r["source_system"],
+                    target_system=r["target_system"],
+                    resource_id=r["resource_id"],
+                    reported_result=r["reported_result"],
+                    details=r["details"],
+                )
+                for r in csv.DictReader(fh)
+            ]
+        return cls(claims)
 
     @property
     def claims(self) -> list[Claim]:
         return list(self._claims)
 
     def claims_for(self, resource_id: str, until: datetime) -> list[Claim]:
-        raise NotImplementedError("lineage.LineageGraph.claims_for")
+        return [c for c in self._claims if c.resource_id == resource_id and c.event_time <= until]
 
     def active_flows(self, t: datetime) -> list[str]:
         raise NotImplementedError("lineage.LineageGraph.active_flows")

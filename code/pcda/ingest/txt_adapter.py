@@ -28,7 +28,7 @@ class TxtAdapter:
 
     def parse(self, path: Path, row: ManifestRow) -> list[Fact]:
         text = path.read_text(encoding="utf-8")
-        em = Emitter(row, self._report)
+        em = Emitter(row, self._report, src="ledger")
         snap = _SNAPSHOT.search(text)
         em.check_capture(snap.group(1) if snap else None, "Snapshot header")
         for n, line in enumerate(text.splitlines(), start=1):

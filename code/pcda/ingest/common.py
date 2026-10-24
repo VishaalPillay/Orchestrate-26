@@ -21,6 +21,7 @@ from pcda.facts import (
     ATTR_LINKED,
     ATTR_PII_FIELDS,
     ATTR_SOURCE_LINE,
+    ATTR_SRC,
     ATTR_STATE,
     ATTR_TABLE,
     Fact,
@@ -121,10 +122,16 @@ class Emitter:
     """Facts for one evidence file. captured_at always comes from the manifest."""
 
     def __init__(
-        self, row: ManifestRow, report: IngestReport | None = None, scope: str | None = None
+        self,
+        row: ManifestRow,
+        report: IngestReport | None = None,
+        scope: str | None = None,
+        src: str | None = None,
     ) -> None:
-        """`scope` namespaces fact_ids when one file is parsed by several emitters (SQL tables)."""
+        """`scope` namespaces fact_ids when one file is parsed by several emitters (SQL tables).
+        `src` is the origin kind stamped on every fact (db_row, ledger, log, document)."""
         self.row = row
+        self._src = src
         self.report = report
         self._scope = f"{scope}:" if scope else ""
         self.facts: list[Fact] = []
@@ -165,6 +172,8 @@ class Emitter:
             merged[ATTR_TABLE] = table
         if source_line is not None:
             merged[ATTR_SOURCE_LINE] = str(source_line)
+        if self._src is not None:
+            merged[ATTR_SRC] = self._src
         for key, value in {**(attrs or {}), **extra}.items():
             if value is None:
                 continue

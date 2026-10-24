@@ -32,6 +32,7 @@ ATTR_SOURCE_LINE = "source_line"  # 1-based line or row reference inside the fil
 ATTR_STATE = "state"  # raw source state: FOUND, NOT_FOUND, IDENTIFIABLE, ACTIVE, DISABLED, BLOCKED, ...
 ATTR_PII_FIELDS = "pii_fields"  # comma list of direct-identifier fields still populated on the record
 ATTR_ID_FIELDS = "id_fields"  # comma list of every field that contributed an identifier
+ATTR_SRC = "src"  # origin kind: db_row | ledger | log | document (drives the attribution tier)
 ATTR_LINKED = "linked_resource"  # LINK facts: the resource this one was derived from
 
 

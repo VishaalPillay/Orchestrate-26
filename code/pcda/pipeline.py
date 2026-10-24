@@ -75,9 +75,10 @@ def build_context(mode: RunMode) -> Context:
 def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
     intake = ctx.intake.classify(case.case_id, case.request_text)
     subject = ctx.closure.subject_of(normalize_email(case.email))
+    # Ownership uses the full store (time-invariant); state and citations use `store`.
     store = ctx.store.as_of(case.audit_at)
     attributions = (
-        ResourceAttribution.for_case(case, subject, ctx.closure, store, ctx.lineage)
+        ResourceAttribution.for_case(case, subject, ctx.closure, ctx.store, ctx.lineage)
         if subject is not None and intake.authorizes_deletion
         else []
     )

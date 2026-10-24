@@ -293,7 +293,7 @@ class LogAdapter:
         return self._emit([line], row, None)
 
     def _emit(self, lines: list[LogLine], row: ManifestRow, trace_id: str | None) -> list[Fact]:
-        em = Emitter(row, self._report)
+        em = Emitter(row, self._report, src="log")
         for line in lines:
             f = line.fields
             event = f.get("event", "")
@@ -322,6 +322,8 @@ class LogAdapter:
                     "level": f.get("level"),
                 }
             )
+            if event == "record_lookup":
+                attrs["src"] = "ledger"  # explicit resource/record_type/result entry
             em.emit(
                 out.kind,
                 line.timestamp,

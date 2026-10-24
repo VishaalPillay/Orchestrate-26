@@ -91,7 +91,7 @@ class JsonAdapter:
     # -- ledger ------------------------------------------------------------
 
     def _parse_ledger(self, doc: Mapping[str, Any], row: ManifestRow) -> list[Fact]:
-        em = Emitter(row, self._report)
+        em = Emitter(row, self._report, src="ledger")
         default = parse_ts(doc.get("exported_at") or row.captured_at.isoformat())
         for rec in doc["records"]:
             self._ledger_record(em, rec, default, table="ledger")
@@ -121,13 +121,14 @@ class JsonAdapter:
                 ATTR_PII_FIELDS: ",".join(view.pii_fields) or None,
                 ATTR_ID_FIELDS: ",".join(view.id_fields) or None,
                 "record_type": record_type,
+                "src": "ledger",
             },
         )
 
     # -- bundle ------------------------------------------------------------
 
     def _parse_bundle(self, doc: Mapping[str, Any], row: ManifestRow) -> list[Fact]:
-        em = Emitter(row, self._report)
+        em = Emitter(row, self._report, src="db_row")
         snapshots = doc["snapshots"]
         vacuous = not any(s["records"] for s in snapshots)
         for snap in snapshots:
@@ -152,7 +153,7 @@ class JsonAdapter:
     # -- service export ----------------------------------------------------
 
     def _parse_service_export(self, doc: Mapping[str, Any], row: ManifestRow) -> list[Fact]:
-        em = Emitter(row, self._report)
+        em = Emitter(row, self._report, src="db_row")
         exported = parse_ts(doc["exported_at"])
         services: Mapping[str, Mapping[str, list[Any]]] = doc["service_exports"]
         vacuous = not any(recs for cols in services.values() for recs in cols.values())
@@ -217,7 +218,7 @@ class JsonAdapter:
     # -- flat collection ---------------------------------------------------
 
     def _parse_collection(self, doc: Mapping[str, Any], row: ManifestRow) -> list[Fact]:
-        em = Emitter(row, self._report)
+        em = Emitter(row, self._report, src="db_row")
         at = parse_ts(doc["captured_at"])
         store, collection = doc.get("source"), doc["collection"]
         if not doc["records"]:

@@ -134,7 +134,7 @@ class SqlAdapter:
     def _table_facts(
         self, conn: sqlite3.Connection, table: str, header: SnapshotHeader, row: ManifestRow
     ) -> list[Fact]:
-        em = Emitter(row, self._report, scope=table)
+        em = Emitter(row, self._report, scope=table, src="db_row")
         fallback = header.captured_at or row.captured_at
         role = _table_role(table, header.topology)
         columns = [c[1] for c in conn.execute(f'PRAGMA table_info("{table}")')]

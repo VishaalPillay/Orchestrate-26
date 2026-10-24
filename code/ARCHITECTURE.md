@@ -53,7 +53,9 @@ Deletion completeness is treated as a proof problem:
 
 Each case runs these stages in order. The global context (rules, identity closure, lineage, FactStore) is built once.
 
-`intake → subject → store.as_of(audit_at) → attribution → solve → skeptic → project → order`
+`intake → subject → attribution (full store) → store.as_of(audit_at) → solve → skeptic → project → order`
+
+Attribution reads the full store and everything after it reads `as_of(audit_at)`; see the ownership/state split below.
 
 ## Modules
 
@@ -66,7 +68,7 @@ Each case runs these stages in order. The global context (rules, identity closur
 | `cases.py` | `CaseRequest` loader, the split definitions, and the evidence-id clock (manifest, activity and audit times). |
 | `facts.py` | `FactKind`, `Fact` (frozen, equality and hash on `fact_id`) and `FactStore`. `as_of(t)` requires `captured_at <= t` and `observed_at <= t`. |
 | `category.py` | `CategoryResolver`: a static `(name, signal)` map, plus an LLM fallback limited to the 15 categories and cached per name. |
-| `identity.py` | Normalizers, `IdentityClosure` (a global union-find over identifiers) and `ResourceAttribution` (per case, by tier, with a gated `activity_temporal`). |
+| `identity.py` | Normalizers, `IdentityClosure` (a global union-find over identifiers, exact matches only; an identifier claimed by two users is never unioned) and `ResourceAttribution` (per case, by tier, with a staleness gate, a post-audit guardrail and a gated `activity_temporal`). |
 | `lineage.py` | `Claim` and `LineageGraph`: active flows at t, reachability, and `affects()` for the validator. |
 | `policy.py` | `ObligationTemplate` and `compile_rules`. BACKUP_ARCHIVE maps to BLOCKED, and there is an implicit DATA_FLOW → DISABLED template. |
 | `solver.py` | `Obligation`, `ObligationStatus`, `Certificate`, `Verdict`, and `solve()`. |
@@ -117,6 +119,25 @@ Each case runs these stages in order. The global context (rules, identity closur
 | `deterministic` | never | read only; image files with no cache entry are skipped and the case is flagged |
 | `live` | Gemini, then Groq | read and write |
 | `replay` | never | read only; a miss is an error |
+
+## Ownership/state split
+
+Two questions look alike and must not share a time rule.
+
+| | Ownership: does resource R belong to the subject? | State: what is true of R at `audit_at`? |
+|---|---|---|
+| Time rule | Time-invariant. Evidence from **any capture time** may establish it. | Strictly `as_of(audit_at)`: `captured_at <= t` and `observed_at <= t`. |
+| Where | `ResourceAttribution.for_case` takes the **full** `FactStore`. | The solver, citations, verdicts and the planner take the `as_of` store. |
+
+Why: a record keeps its owner, but sample gold contains 8 resources whose only identifier-bearing evidence was captured after `audit_at` (for example `audit_record_4902` in `evidence_06`, captured two days after case_09's audit). Gold lists them with an empty `evidence_id`.
+
+Guardrails on ownership:
+
+- **Post-audit guardrail.** A resource counts only if it has at least one fact **observed** at or before `audit_at` (whatever the capture time of its file) or one `system_activity` row at or before `audit_at`. Resources first seen after the audit were created after it and are never pulled in. A fact's time is its `observed_at`: a record observed before the audit in a snapshot delivered later did exist at the audit. Read strictly by capture time, 5 of those 8 resources would be rejected.
+- **Staleness gate.** A candidate needs one supporting observation at or after `requested_at`. Snapshots that predate the request describe an earlier life of the identifier (the case_17 decoy `account_6523`, last seen 162 days before the request).
+- **No citation leakage.** `AttributedResource.evidence_ids` holds only evidence visible at `audit_at`. Evidence captured later is listed in `late_evidence_ids` and may never be cited or used for state.
+
+Rejected candidates are returned by `for_case_detailed` with the reason as their last reason.
 
 ## Invariants
 

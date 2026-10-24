@@ -107,7 +107,7 @@ class PdfAdapter:
             self._report.skipped.append(SkippedEvidence(row.file_id, row.captured_at, reason))
             self._report.warnings.append(f"{row.file_id}: {reason}")
             return []
-        em = Emitter(row, self._report)
+        em = Emitter(row, self._report, src="document")
         for label in ("captured", "issued", "generated"):
             em.check_capture(_labelled_date(label, text), f"'{label}' stamp")
         title = next((l.strip() for l in text.splitlines() if l.strip()), "pdf")
