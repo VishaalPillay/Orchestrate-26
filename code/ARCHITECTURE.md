@@ -80,12 +80,13 @@ Each case runs these stages in order. The global context (rules, identity closur
 |---|---|
 | `base.py` | `ManifestRow`, the `Adapter` protocol, `IngestReport` and `SkippedEvidence`. |
 | `registry.py` | Dispatch by extension, and `ingest_all()` into one global `FactStore`. |
-| `json_adapter.py` | Ledgers, snapshot bundles (coverage from empty collections) and service resource exports. |
+| `common.py` | Shared by all adapters: `Emitter` (deterministic fact ids, manifest `captured_at`), identifier normalization, `view_record` (identifiers and which direct-identifier fields are still populated), ledger vocabulary mapping. |
+| `json_adapter.py` | Ledgers, snapshot bundles (coverage from empty collections), service resource exports and flat collections (`{captured_at, source, collection, records}`). |
 | `log_adapter.py` | Six log styles, grouping by `trace_id` with a per-line fallback. A 404 lookup is ABSENCE. |
 | `sql_adapter.py` | Loads into in-memory sqlite. Topology comes from the header or `snapshot_scope`. Emits coverage facts with an `is_vacuous` flag. |
 | `txt_adapter.py` | Pipe-delimited handover records. |
-| `pdf_adapter.py` | The pymupdf text layer is primary. Perception is used only when the text is unusable. |
-| `image_adapter.py` | PNG via perception. In deterministic mode without a cache, the file is skipped and the case is flagged. |
+| `pdf_adapter.py` | The pymupdf text layer is primary. Perception is used only when the text is unusable (not wired up yet: such a PDF is skipped and recorded). |
+| `image_adapter.py` | PNG via perception. In deterministic mode without a cache, the file is skipped and the case is flagged. Perception is not implemented yet, so every PNG is skipped. |
 
 ### `agents/`
 

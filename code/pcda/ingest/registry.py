@@ -22,10 +22,10 @@ def build_adapters(
     perception: PerceptionAgent, mode: RunMode, report: IngestReport
 ) -> dict[str, Adapter]:
     return {
-        ".json": JsonAdapter(),
-        ".log": LogAdapter(),
-        ".sql": SqlAdapter(),
-        ".txt": TxtAdapter(),
+        ".json": JsonAdapter(report),
+        ".log": LogAdapter(report),
+        ".sql": SqlAdapter(report),
+        ".txt": TxtAdapter(report),
         ".pdf": PdfAdapter(perception, mode, report),
         ".png": ImageAdapter(perception, mode, report),
     }
