@@ -21,6 +21,17 @@ Rules:
   such as user_13, 64-character hashes, resource ids such as search_428).
 - A record is one row, card or panel about one resource. Transcribe every
   record on the screen, including ones that look unrelated or deleted.
+- A resource_id is an internal id made of lowercase words joined by
+  underscores and ending in digits: account_5762, support_1034,
+  analytics_7438, data_flow_1121, audit_record_003. When the record's header,
+  subtitle or panel shows such an id, use it as resource_id even if other ids
+  sit next to it.
+- These are never a resource_id: user references such as user_20 (put them in
+  user_ids), ticket, order, invoice or finance numbers such as CS-5034,
+  ORD-20265762 or FIN-7742 (put them in fields), and file names.
+- If a record shows another resource id it links to (for example
+  "Support: CS-8538 · support_9538"), also output that id as its own record
+  containing only what is shown about it.
 
 ### user
 

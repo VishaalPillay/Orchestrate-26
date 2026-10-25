@@ -140,3 +140,13 @@ def test_state_words_map_through_fixed_vocabularies():
 def test_parse_screen_is_defensive():
     screen, notes = parse_screen("e", {"records": [{"resource_id": "search_1", "identifiers": "bad"}, "junk"]})
     assert [r.resource_id for r in screen.records] == ["search_1"] and notes
+
+
+def test_misplaced_resource_id_is_adopted_only_when_unique():
+    facts, report = ground(
+        PerceivedRecord(None, None, emails=("sj.park@naver.com",), user_ids=("search_77",)),
+        PerceivedRecord("CS-5034", None, fields={"Category": "search_88", "Other": "account_9"}),
+    )
+    assert [f.resource_id for f in facts] == ["search_77"]
+    assert any("only id transcribed" in w for w in report.warnings)
+    assert any("record 2 dropped" in w for w in report.warnings)  # two candidates: not guessed

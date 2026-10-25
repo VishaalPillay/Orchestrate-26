@@ -153,6 +153,19 @@ def ground_screen(
         rid = (rec.resource_id or "").strip()
         m = _RESOURCE_ID.match(rid)
         if not m or m.group(1) not in known_prefixes:
+            # The model sometimes transcribes a visible resource id into the wrong slot
+            # (marketing_001 among identifiers, support_1034 as a field). Adopt it only
+            # when exactly one value of this record matches a known id pattern.
+            transcribed = [*rec.emails, *rec.phones, *rec.user_ids, *rec.hashes, *rec.fields.values()]
+            found = sorted({
+                v.strip() for v in transcribed
+                if (mv := _RESOURCE_ID.match(v.strip())) and mv.group(1) in known_prefixes
+            })
+            if len(found) == 1:
+                report.warnings.append(f"{row.file_id}: record {n} resource_id {rid or None!r} -> {found[0]} (only id transcribed)")
+                rid = found[0]
+                m = _RESOURCE_ID.match(rid)
+        if not m or m.group(1) not in known_prefixes:
             report.warnings.append(f"{row.file_id}: record {n} dropped, resource_id {rid or None!r} is not a known pattern")
             continue
         prefix = m.group(1)
