@@ -1,8 +1,9 @@
 """Content-hash disk cache for LLM responses.
 
-The key covers the task, prompt, response schema and attachment digests, not
-the provider or model, so a replay works whichever provider answered live.
-Files live under code/.cache/llm/ (git-ignored, shipped in code.zip).
+The key covers the requested model, the prompt (system + user), the response
+schema and the attachment bytes. It does not cover the provider that answered,
+so a replay works whichever provider in the chain answered live. Files live
+under code/.cache/llm/ (git-ignored, shipped in code.zip).
 """
 
 from __future__ import annotations
@@ -15,9 +16,9 @@ from pathlib import Path
 from typing import Any
 
 
-def content_key(task: str, prompt: str, schema: dict[str, Any] | None, attachments: list[bytes]) -> str:
+def content_key(model: str, prompt: str, schema: dict[str, Any] | None, attachments: list[bytes]) -> str:
     h = hashlib.sha256()
-    h.update(json.dumps({"task": task, "prompt": prompt, "schema": schema}, sort_keys=True).encode())
+    h.update(json.dumps({"model": model, "prompt": prompt, "schema": schema}, sort_keys=True).encode())
     for blob in attachments:
         h.update(hashlib.sha256(blob).digest())
     return h.hexdigest()

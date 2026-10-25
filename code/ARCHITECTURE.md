@@ -46,7 +46,7 @@ Deletion completeness is treated as a proof problem:
                      output.csv
 
    agents/intake, agents/perception, category fallback --> llm/client
-   llm/client: Gemini -> Groq -> cache only; disk cache + token ledger
+   llm/client: LLM_PROVIDERS chain (gemini, groq) over one OpenAI-compatible SDK; disk cache + token ledger
 ```
 
 ## Per-case control flow (`pipeline.run_case`)
@@ -88,23 +88,23 @@ Attribution reads the full store and everything after it reads `as_of(audit_at)`
 | `sql_adapter.py` | Loads into in-memory sqlite. Topology comes from the header or `snapshot_scope`. Emits coverage facts with an `is_vacuous` flag. |
 | `txt_adapter.py` | Pipe-delimited handover records. |
 | `pdf_adapter.py` | The pymupdf text layer is primary. Perception is used only when the text is unusable (not wired up yet: such a PDF is skipped and recorded). |
-| `image_adapter.py` | PNG via perception. In deterministic mode without a cache, the file is skipped and the case is flagged. Perception is not implemented yet, so every PNG is skipped. |
+| `image_adapter.py` | PNG via perception, cache first in every mode. Grounding is in code: a resource_id must match a known prefix (system_activity and text evidence), identifiers are normalized, observed_at is the latest visible timestamp at or before captured_at (else captured_at), state words map through fixed vocabularies, and facts get `src=perception` (LEDGER tier, below db_row). Images are ingested after all text files, so `cross_check` flags identifiers that disagree with text facts for the same resource. Without a cached answer in deterministic mode the file is skipped and the case is flagged. |
 
 ### `agents/`
 
 | Module | Role |
 |---|---|
 | `intake.py` | `IntakeAgent`: does `request_text` authorize deletion? Its answer is an input to the solver. |
-| `perception.py` | `PerceptionAgent`: returns raw observations from images or unusable PDF text, grounded by code. |
+| `perception.py` | `PerceptionAgent`: one call per image, prompt in `agents/prompts.md` (loaded by `agents/prompts.py`), returns an untrusted `PerceivedScreen` of transcribed records. It never decides a category, a state or an owner. |
 | `skeptic.py` | `SkepticAgent`: advisory objections, including every `activity_temporal` attribution. |
 
 ### `llm/`
 
 | Module | Role |
 |---|---|
-| `client.py` | `RunMode`, the `Provider` protocol, `GeminiProvider` and `GroqProvider` (official SDKs, lazy import), and `LLMClient` (retries honor Retry-After). |
-| `cache.py` | Content-hash `DiskCache` under `code/.cache/llm/`. The key is independent of the provider. |
-| `ledger.py` | `TokenLedger`: calls, cache hits and input/output tokens per provider and model. |
+| `client.py` | `RunMode`, `OpenAICompatProvider` and `LLMClient`. **Decision change:** this replaces the earlier SDK-per-provider design (google-genai, groq). Gemini and Groq both expose OpenAI-compatible endpoints, so one SDK (`openai`) serves both with a per-provider `base_url`. The chain comes from `LLM_PROVIDERS`; each request names its model env var (`INTAKE_MODEL`, `PERCEPTION_MODEL`, ...), and Groq uses `GROQ_FALLBACK_MODEL`. Per call: an RPM limiter (`LLM_RPM_LIMIT`), thinking off when `LLM_DISABLE_THINKING=1`, at most 3 attempts honoring Retry-After, and strict JSON with one repair turn. Keys are never printed or logged. |
+| `cache.py` | Content-hash `DiskCache` under `code/.cache/llm/`, keyed on the requested model, the prompt, the schema and the attachment bytes. It does not depend on which provider in the chain answered. |
+| `ledger.py` | `TokenLedger`: calls, cache hits, errors and input/output tokens per provider and model. Every event is appended to `code/.cache/runs/run_log.jsonl` (no prompts, answers or keys). |
 
 ### Top level
 
@@ -117,7 +117,7 @@ Attribution reads the full store and everything after it reads `as_of(audit_at)`
 | Mode | Provider calls | Cache |
 |---|---|---|
 | `deterministic` | never | read only; image files with no cache entry are skipped and the case is flagged |
-| `live` | Gemini, then Groq | read and write |
+| `live` | each provider in `LLM_PROVIDERS`, in order | read and write |
 | `replay` | never | read only; a miss is an error |
 
 ## Ownership/state split

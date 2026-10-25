@@ -37,6 +37,7 @@ class SkippedEvidence:
 class IngestReport:
     skipped: list[SkippedEvidence] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)  # image vs text evidence disagreements
 
 
 class Adapter(Protocol):

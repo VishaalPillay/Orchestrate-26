@@ -80,6 +80,8 @@ _SRC_TIER: Final[dict[str, LinkTier]] = {
     "ledger": LinkTier.LEDGER,
     "document": LinkTier.LEDGER,
     "log": LinkTier.LOG_TRACE,
+    # Screenshot transcriptions: grounded by code, but read by a model. Below db_row.
+    "perception": LinkTier.LEDGER,
 }
 
 # activity_temporal gate (b): |event_time - reported_at| must be within this.

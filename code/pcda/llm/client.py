@@ -1,21 +1,35 @@
-"""Provider-agnostic LLM client: Gemini first, then Groq, then cache only.
+"""Provider-agnostic LLM client over OpenAI-compatible endpoints.
+
+Gemini and Groq both expose OpenAI-compatible chat endpoints, so one SDK
+(openai) serves every provider; only base_url, key and model differ. The
+provider chain is LLM_PROVIDERS (e.g. "gemini,groq"); provider NAME reads
+NAME_BASE_URL and NAME_API_KEY. The model for a request comes from the env
+var the request names (INTAKE_MODEL, PERCEPTION_MODEL, ...); a provider with
+NAME_FALLBACK_MODEL set uses that model instead (Groq: GROQ_FALLBACK_MODEL).
+Nothing is hardcoded and no key is ever printed or logged.
 
 Modes:
   deterministic  never calls a provider; a cached answer is still returned.
   live           cache, then each provider in order; answers are cached.
   replay         cache only; a miss raises CacheMiss.
 
-Providers wrap the official SDKs (google-genai, groq), imported lazily so the
-deterministic path needs neither. Keys come from the environment only.
+Per call: a client-side RPM limiter (LLM_RPM_LIMIT), thinking off when
+LLM_DISABLE_THINKING=1, at most 3 attempts honoring Retry-After, strict JSON
+with one repair retry, and a ledger row appended to code/.cache/runs/run_log.jsonl.
+The cache key is the requested model + prompt + schema + attachment bytes.
 """
 
 from __future__ import annotations
 
+import base64
+import json
 import os
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from pcda.llm.cache import DiskCache, content_key
 from pcda.llm.ledger import TokenLedger
@@ -37,11 +51,20 @@ class Attachment:
 class LLMRequest:
     task: str  # e.g. "intake", "perception.image", "category"
     prompt: str
+    model_env: str  # env var naming the model, e.g. "PERCEPTION_MODEL"
+    system: str = ""
     schema: dict[str, Any] | None = None  # JSON schema the answer must satisfy
     attachments: tuple[Attachment, ...] = ()
 
+    @property
+    def model(self) -> str:
+        model = os.environ.get(self.model_env, "").strip()
+        if not model:
+            raise LLMUnavailable(f"{self.task}: {self.model_env} is not set")
+        return model
+
     def cache_key(self) -> str:
-        return content_key(self.task, self.prompt, self.schema, [a.data for a in self.attachments])
+        return content_key(self.model, self.system + "\n\n" + self.prompt, self.schema, [a.data for a in self.attachments])
 
 
 @dataclass(frozen=True)
@@ -56,7 +79,7 @@ class LLMResponse:
 
 
 class LLMUnavailable(RuntimeError):
-    """Deterministic mode, no cached answer."""
+    """Deterministic mode with no cached answer, or every provider failed."""
 
 
 class CacheMiss(RuntimeError):
@@ -74,57 +97,136 @@ class ProviderError(Exception):
         return f"{self.provider}: {self.message}"
 
 
+class InvalidJSON(ValueError):
+    pass
+
+
 class Provider(Protocol):
     name: str
-    model: str
 
-    def complete(self, request: LLMRequest) -> LLMResponse: ...
+    def model_for(self, request: LLMRequest) -> str: ...
+
+    def chat(self, model: str, messages: list[dict[str, Any]], json_mode: bool) -> tuple[str, int, int]: ...
 
 
-class GeminiProvider:
-    name = "gemini"
+class RateLimiter:
+    """Sliding one-minute window shared by every thread using one provider."""
 
-    def __init__(self, model: str | None = None) -> None:
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        self._api_key = os.environ.get("GEMINI_API_KEY")
+    def __init__(self, rpm: int) -> None:
+        self._rpm = max(1, rpm)
+        self._calls: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._calls and now - self._calls[0] >= 60.0:
+                    self._calls.popleft()
+                if len(self._calls) < self._rpm:
+                    self._calls.append(now)
+                    return
+                wait = 60.0 - (now - self._calls[0])
+            time.sleep(max(wait, 0.05))
+
+
+# How each provider's OpenAI-compatible endpoint turns thinking off (or as low
+# as it goes: gpt-oss on Groq cannot disable reasoning).
+_THINKING_OFF: Final[dict[str, dict[str, Any]]] = {
+    "gemini": {"reasoning_effort": "none"},
+    "groq": {"reasoning_effort": "low"},
+}
+
+
+class OpenAICompatProvider:
+    def __init__(self, name: str, base_url: str, api_key: str, rpm: int, disable_thinking: bool) -> None:
+        self.name = name
+        self._base_url = base_url
+        self._api_key = api_key
+        self._limiter = RateLimiter(rpm)
+        self._extra = _THINKING_OFF.get(name, {}) if disable_thinking else {}
         self._sdk: Any = None
 
-    @property
-    def available(self) -> bool:
-        return bool(self._api_key)
+    def model_for(self, request: LLMRequest) -> str:
+        override = os.environ.get(f"{self.name.upper()}_FALLBACK_MODEL", "").strip()
+        return override or request.model
 
     def _client(self) -> Any:
         if self._sdk is None:
-            from google import genai
+            from openai import OpenAI  # lazy: deterministic runs never import it
 
-            self._sdk = genai.Client(api_key=self._api_key)
+            # Retries are ours (Retry-After aware), so the SDK's are off.
+            timeout = float(os.environ.get("LLM_TIMEOUT_S", "120") or "120")
+            self._sdk = OpenAI(base_url=self._base_url, api_key=self._api_key, max_retries=0, timeout=timeout)
         return self._sdk
 
-    def complete(self, request: LLMRequest) -> LLMResponse:
-        raise NotImplementedError("llm.GeminiProvider.complete")
+    def _redact(self, text: str) -> str:
+        return text.replace(self._api_key, "[REDACTED]") if self._api_key else text
+
+    def chat(self, model: str, messages: list[dict[str, Any]], json_mode: bool) -> tuple[str, int, int]:
+        import openai
+
+        self._limiter.acquire()
+        kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": 0}
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        kwargs.update(self._extra)
+        try:
+            resp = self._client().chat.completions.create(**kwargs)
+        except openai.APIStatusError as exc:
+            retry_after = _retry_after(exc.response.headers if exc.response is not None else {})
+            retryable = exc.status_code == 429 or exc.status_code >= 500
+            raise ProviderError(self.name, self._redact(f"HTTP {exc.status_code}: {exc.message}"), retryable, retry_after)
+        except (openai.APIConnectionError, openai.APITimeoutError) as exc:
+            raise ProviderError(self.name, self._redact(f"{type(exc).__name__}: {exc}"), True, None)
+        text = resp.choices[0].message.content or ""
+        usage = resp.usage
+        return text, (usage.prompt_tokens if usage else 0), (usage.completion_tokens if usage else 0)
 
 
-class GroqProvider:
-    name = "groq"
+def _retry_after(headers: Any) -> float | None:
+    value = headers.get("retry-after") if headers else None
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None
 
-    def __init__(self, model: str | None = None) -> None:
-        self.model = model or os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-        self._api_key = os.environ.get("GROQ_API_KEY")
-        self._sdk: Any = None
 
-    @property
-    def available(self) -> bool:
-        return bool(self._api_key)
+def parse_json(text: str, schema: dict[str, Any] | None) -> Any:
+    """Strict JSON (a ```json fence is tolerated), checked against the schema's top level."""
+    body = text.strip()
+    if body.startswith("```"):
+        body = body.strip("`")
+        body = body[4:] if body.lower().startswith("json") else body
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise InvalidJSON(f"not JSON: {exc}") from exc
+    if schema:
+        want = schema.get("type")
+        if want == "object" and not isinstance(data, dict):
+            raise InvalidJSON("top level is not an object")
+        if want == "array" and not isinstance(data, list):
+            raise InvalidJSON("top level is not an array")
+        if isinstance(data, dict):
+            missing = [k for k in schema.get("required", []) if k not in data]
+            if missing:
+                raise InvalidJSON(f"missing required keys {missing}")
+    return data
 
-    def _client(self) -> Any:
-        if self._sdk is None:
-            from groq import Groq
 
-            self._sdk = Groq(api_key=self._api_key)
-        return self._sdk
-
-    def complete(self, request: LLMRequest) -> LLMResponse:
-        raise NotImplementedError("llm.GroqProvider.complete")
+def _messages(request: LLMRequest) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if request.system:
+        out.append({"role": "system", "content": request.system})
+    user: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
+    for a in request.attachments:
+        b64 = base64.b64encode(a.data).decode("ascii")
+        user.append({"type": "image_url", "image_url": {"url": f"data:{a.mime_type};base64,{b64}"}})
+    out.append({"role": "user", "content": user})
+    return out
 
 
 @dataclass
@@ -140,13 +242,9 @@ class LLMClient:
         key = request.cache_key()
         hit = self.cache.get(key)
         if hit is not None:
-            self.ledger.record_cache_hit(hit["provider"], hit["model"])
+            self.ledger.record_cache_hit(request.task, hit["provider"], hit["model"])
             return LLMResponse(
-                text=hit["text"],
-                parsed=hit.get("parsed"),
-                provider=hit["provider"],
-                model=hit["model"],
-                cached=True,
+                text=hit["text"], parsed=hit.get("parsed"), provider=hit["provider"], model=hit["model"], cached=True
             )
         if self.mode is RunMode.DETERMINISTIC:
             raise LLMUnavailable(f"{request.task}: no cached answer in deterministic mode")
@@ -156,43 +254,78 @@ class LLMClient:
         errors: list[str] = []
         for provider in self.providers:
             try:
-                resp = self._with_retries(provider, request)
-            except ProviderError as exc:
-                errors.append(str(exc))
+                resp = self._ask(provider, request)
+            except (ProviderError, InvalidJSON) as exc:
+                errors.append(f"{provider.name}: {exc}")
                 continue
-            self.ledger.record(resp.provider, resp.model, resp.input_tokens, resp.output_tokens)
             self.cache.put(
                 key,
                 {
                     "task": request.task,
+                    "requested_model": request.model,
                     "text": resp.text,
                     "parsed": resp.parsed,
                     "provider": resp.provider,
                     "model": resp.model,
+                    "input_tokens": resp.input_tokens,
+                    "output_tokens": resp.output_tokens,
                 },
             )
             return resp
         raise LLMUnavailable(f"{request.task}: all providers failed: {'; '.join(errors) or 'none configured'}")
 
-    def _with_retries(self, provider: Provider, request: LLMRequest) -> LLMResponse:
-        last: ProviderError | None = None
-        for attempt in range(self.max_attempts):
+    def _ask(self, provider: Provider, request: LLMRequest) -> LLMResponse:
+        """One answer from one provider: retries, then strict JSON with one repair turn."""
+        model = provider.model_for(request)
+        messages = _messages(request)
+        json_mode = request.schema is not None
+        text, tin, tout = self._with_retries(provider, model, messages, json_mode, request.task)
+        if not json_mode:
+            return LLMResponse(text, None, provider.name, model, tin, tout)
+        try:
+            parsed = parse_json(text, request.schema)
+        except InvalidJSON as exc:
+            repair = messages + [
+                {"role": "assistant", "content": text},
+                {
+                    "role": "user",
+                    "content": f"Your reply was not valid for the required JSON format ({exc}). "
+                    "Reply again with only the corrected JSON object and nothing else.",
+                },
+            ]
+            text, rin, rout = self._with_retries(provider, model, repair, json_mode, request.task + ".repair")
+            tin, tout = tin + rin, tout + rout
+            parsed = parse_json(text, request.schema)  # a second failure falls through to the next provider
+        return LLMResponse(text, parsed, provider.name, model, tin, tout)
+
+    def _with_retries(
+        self, provider: Provider, model: str, messages: list[dict[str, Any]], json_mode: bool, task: str
+    ) -> tuple[str, int, int]:
+        for attempt in range(1, self.max_attempts + 1):
             try:
-                return provider.complete(request)
+                text, tin, tout = provider.chat(model, messages, json_mode)
             except ProviderError as exc:
-                last = exc
-                if not exc.retryable or attempt == self.max_attempts - 1:
+                self.ledger.record_error(task, provider.name, model, attempt, exc.message)
+                if not exc.retryable or attempt == self.max_attempts:
                     raise
-                delay = exc.retry_after if exc.retry_after is not None else self.base_backoff * 2**attempt
+                delay = exc.retry_after if exc.retry_after is not None else self.base_backoff * 2 ** (attempt - 1)
                 time.sleep(delay)
-        assert last is not None
-        raise last
+                continue
+            self.ledger.record(task, provider.name, model, tin, tout)
+            return text, tin, tout
+        raise AssertionError("unreachable")
 
 
 def build_client(mode: RunMode, cache: DiskCache, ledger: TokenLedger) -> LLMClient:
     providers: list[Provider] = []
     if mode is RunMode.LIVE:
-        for p in (GeminiProvider(), GroqProvider()):
-            if p.available:
-                providers.append(p)
+        rpm = int(os.environ.get("LLM_RPM_LIMIT", "10") or "10")
+        no_thinking = os.environ.get("LLM_DISABLE_THINKING", "0").strip() == "1"
+        for name in (n.strip().lower() for n in os.environ.get("LLM_PROVIDERS", "").split(",")):
+            if not name:
+                continue
+            base_url = os.environ.get(f"{name.upper()}_BASE_URL", "").strip()
+            api_key = os.environ.get(f"{name.upper()}_API_KEY", "").strip()
+            if base_url and api_key:
+                providers.append(OpenAICompatProvider(name, base_url, api_key, rpm, no_thinking))
     return LLMClient(mode=mode, cache=cache, ledger=ledger, providers=providers)

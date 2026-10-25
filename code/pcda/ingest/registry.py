@@ -19,28 +19,49 @@ from pcda.llm.client import RunMode
 
 
 def build_adapters(
-    perception: PerceptionAgent, mode: RunMode, report: IngestReport
+    perception: PerceptionAgent,
+    mode: RunMode,
+    report: IngestReport,
+    known_prefixes: frozenset[str] = frozenset(),
 ) -> dict[str, Adapter]:
+    """`known_prefixes`: resource-id prefixes from system_activity, for image grounding."""
     return {
         ".json": JsonAdapter(report),
         ".log": LogAdapter(report),
         ".sql": SqlAdapter(report),
         ".txt": TxtAdapter(report),
         ".pdf": PdfAdapter(perception, mode, report),
-        ".png": ImageAdapter(perception, mode, report),
+        ".png": ImageAdapter(perception, mode, report, known_prefixes),
     }
 
 
 def ingest_all(
     manifest: list[ManifestRow], adapters: dict[str, Adapter], report: IngestReport
 ) -> FactStore:
-    """Parse every manifest file into one global FactStore. Case-independent."""
+    """Parse every manifest file into one global FactStore. Case-independent.
+
+    Two passes: every text file first, then images, so image grounding knows the
+    resource prefixes of the text evidence and can cross-check identifiers.
+    """
     store = FactStore()
+    images: list[tuple[ManifestRow, ImageAdapter]] = []
     for row in manifest:
         path = row.absolute_path
         adapter = adapters.get(path.suffix.lower())
         if adapter is None:
             raise ValueError(f"no adapter for {row.file_id} ({path.suffix})")
+        if isinstance(adapter, ImageAdapter):
+            images.append((row, adapter))
+            continue
         for fact in adapter.parse(path, row):
+            store.add(fact)
+    bound: set[int] = set()
+    for row, adapter in images:
+        if id(adapter) not in bound:
+            adapter.bind_text_store(FactStore(list(store)))
+            bound.add(id(adapter))
+        facts = adapter.parse(row.absolute_path, row)
+        adapter.cross_check(facts)
+        for fact in facts:
             store.add(fact)
     return store

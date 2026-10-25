@@ -210,7 +210,10 @@ class CategoryResolver:
                 add(1, f.attrs["collection"], signals)
             if f.attrs.get(ATTR_TABLE):
                 add(2, f.attrs[ATTR_TABLE], signals)
-        if not pooled:
+        # Activity target systems decide only when no fact name does (e.g. a
+        # resource seen only on a screenshot, whose screen title is not a category).
+        fact_decides = any(self.resolve(name, sig) is not None for (_, name), sig in pooled.items())
+        if not fact_decides:
             for c in claims:
                 add(3, f"activity:{c.target_system}", frozenset())
 
