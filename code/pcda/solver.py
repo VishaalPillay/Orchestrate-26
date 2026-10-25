@@ -54,6 +54,7 @@ CLEARED: Final = "CLEARED"  # record present, no direct identifier populated
 ACTIVE: Final = "ACTIVE"
 DISABLED: Final = "DISABLED"
 BLOCKED: Final = "BLOCKED"
+UNPROVEN: Final = "UNPROVEN"  # exists at audit_at, required guard state not evidenced
 
 # Tie-break among facts observed at the same instant: higher wins.
 _CONSERVATIVE: Final[dict[str, int]] = {
@@ -148,6 +149,17 @@ def resource_state(
     return None, None, False
 
 
+def existence_fact(resource: AttributedResource, store: FactStore) -> Fact | None:
+    """Latest fact at audit_at showing the resource exists (no LINK, coverage or absence)."""
+    late = set(resource.late_evidence_ids)
+    present = [
+        f
+        for f in store.by_resource(resource.resource_id)
+        if f.kind not in (FactKind.LINK, FactKind.ABSENCE) and not f.is_coverage and f.evidence_id not in late
+    ]
+    return max(present, key=lambda f: (f.observed_at, f.captured_at, f.evidence_id)) if present else None
+
+
 def covering_snapshot(system_id: str, store: FactStore) -> Fact | None:
     """Latest non-vacuous table snapshot that covers system_id (store is as_of audit_at)."""
     best: Fact | None = None
@@ -221,6 +233,14 @@ def solve(
         template = templates[cat.category]
         reading, fact, via_coverage = resource_state(res, template, store)
         status = _judge(template.required_state, reading)
+        if status is ObligationStatus.UNKNOWN and template.required_state in _GUARD_STATES:
+            # Burden of proof: COMPLETE needs proof that no sync or restore path can
+            # recreate the data. A flow or archive whose existence is evidenced at
+            # audit_at but whose disabled/blocked state is not is an open risk.
+            existence = existence_fact(res, store)
+            if existence is not None:
+                status, reading, fact = ObligationStatus.OPEN, UNPROVEN, existence
+                flags.append(f"unproven_guard:{res.resource_id}")
         if template.required_state == PRESENT and reading == ABSENT:
             flags.append(f"retained_missing:{res.resource_id}")
         if status is ObligationStatus.UNKNOWN:

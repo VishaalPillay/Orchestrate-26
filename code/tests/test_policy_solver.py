@@ -139,3 +139,24 @@ def test_incomplete_projection_and_late_evidence_never_cited() -> None:
     late = res("search_001", "search_service", late=("ev_a",))
     ob = next(o for o in cert.obligations if o.resource_id == "search_001")
     assert cite(type(ob)(late, ob.category, ob.template, ob.status), store, AUDIT) == ""
+
+
+def test_guard_with_existence_but_no_state_is_open_risk() -> None:
+    """Burden of proof: a backup seen at audit_at with no restore setting is a restore risk."""
+    seen = fact("evidence_32:1", "backup_9287", FactKind.PRESENCE, "2026-09-05T10:00:00Z",
+                system="backup_service", table="backup_catalog")
+    store = FactStore([seen])
+    cert = solve(case(), DELETION, "user_x", [res("backup_9287", "backup_service")], store, TEMPLATES,
+                 LineageGraph([]), full_store=store, resolver=CategoryResolver(None))
+    (ob,) = cert.obligations
+    assert ob.status is ObligationStatus.OPEN and ob.violated_by is seen
+    assert cert.verdict is Verdict.INCOMPLETE and "unproven_guard:backup_9287" in cert.flags
+    steps = order_steps(project(cert, store, AUDIT))
+    assert [(s.operation, s.evidence_id) for s in steps] == [
+        ("REPORT_RESTORE_RISK", "evidence_32"), ("BLOCK_RESTORE", ""), ("VERIFY_RESTORE_BLOCKED", "")
+    ]
+    # Nothing evidences existence: still UNKNOWN, never an open risk.
+    empty = FactStore([])
+    cert = solve(case(), DELETION, "user_x", [res("backup_9287", "backup_service")], empty, TEMPLATES,
+                 LineageGraph([]), full_store=store, resolver=CategoryResolver(None))
+    assert cert.obligations[0].status is ObligationStatus.UNKNOWN
