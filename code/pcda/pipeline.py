@@ -35,10 +35,16 @@ from pcda.solver import Certificate, ObligationStatus, Verdict, solve
 
 
 # Activity rows that may link a resource to a request when nothing else does.
-JOINT_PASSES: tuple[tuple[str, str], ...] = (
-    ("DELETE_RECORD", "account_service"),
-    ("ANONYMIZE_RECORD", "analytics_platform"),
+# (event_type, target_system, fallback_only). A fallback_only pass is used only
+# when the case would otherwise have no provable obligation at all (the
+# NOT_APPLICABLE fallback). Analytics is restricted: on the samples it made 1
+# correct pick, while 3 cases with no analytics record (01, 14, 31) reached a
+# single candidate and were stopped only because another case contested it.
+JOINT_PASSES: tuple[tuple[str, str, bool], ...] = (
+    ("DELETE_RECORD", "account_service", False),
+    ("ANONYMIZE_RECORD", "analytics_platform", True),
 )
+FALLBACK_FLAG = "fallback_no_provable_obligation"
 
 
 @dataclass
@@ -82,7 +88,7 @@ def build_context(mode: RunMode) -> Context:
     every_case = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
     joint = tuple(
         JointActivityAttribution.build(every_case, closure, store, lineage, event_type=e, target_system=t)
-        for e, t in JOINT_PASSES
+        for e, t, _ in JOINT_PASSES
     )
     return Context(
         mode=mode,
@@ -150,12 +156,14 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
         if subject is not None
         else []
     )
-    for (_, system), joint_pass in zip(JOINT_PASSES, ctx.joint):
+    deferred: list[AttributedResource] = []  # fallback_only joint links
+    for (_, system, fallback_only), joint_pass in zip(JOINT_PASSES, ctx.joint):
         joint = joint_pass.assigned.get(case.case_id)
         if joint is not None and not any(a.resource_id == joint.resource_id for a in attributions):
-            attributions.append(joint)
+            (deferred if fallback_only else attributions).append(joint)
         elif case.case_id in joint_pass.rejected:
             flags.append(f"joint_none:{system}:{joint_pass.rejected[case.case_id]}")
+    base_attributions = attributions
     attributions, system_flags = canonicalize(attributions, ctx)
     flags.extend(system_flags)
 
@@ -170,17 +178,25 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
         )
 
     store = ctx.store.as_of(case.audit_at)
-    certificate = solve(
-        case,
-        intake,
-        subject,
-        attributions if intake.authorizes_deletion is not False else [],
-        store,
-        ctx.templates,
-        ctx.lineage,
-        full_store=ctx.store,
-        resolver=ctx.resolver,
-    )
+
+    def solve_with(resources: list[AttributedResource]) -> Certificate:
+        return solve(
+            case,
+            intake,
+            subject,
+            resources if intake.authorizes_deletion is not False else [],
+            store,
+            ctx.templates,
+            ctx.lineage,
+            full_store=ctx.store,
+            resolver=ctx.resolver,
+        )
+
+    certificate = solve_with(attributions)
+    if deferred and FALLBACK_FLAG in certificate.flags:
+        attributions, system_flags = canonicalize(base_attributions + deferred, ctx)
+        certificate = solve_with(attributions)
+        flags.extend(f"joint_fallback:{a.system_id}:{a.resource_id}" for a in deferred)
     objections = ctx.skeptic.challenge(certificate, attributions)
     flags.extend(f"skeptic:{o.kind}:{o.target}" for o in objections)
     if certificate.verdict is not Verdict.NOT_APPLICABLE:
