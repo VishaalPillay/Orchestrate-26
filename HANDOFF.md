@@ -13,7 +13,7 @@ Samples (32 cases, `python code/evaluation/score.py --diff`):
 | evidence_id accuracy on matched steps | 179/179 |
 | Exact-sequence matches | 20/32 |
 
-Evaluation set: `output.csv` at the repo root comes from `--mode live` and is reproduced byte for byte by `--mode replay`. It has 518 sorted rows and passes the validator: 390 INCOMPLETE, 117 COMPLETE, 11 NOT_APPLICABLE. Of those 11, 10 come from intake and 1 (case_61) is the no-provable-obligation fallback. `--mode deterministic` differs in exactly 1 row (case_45, see below).
+Evaluation set: `output.csv` at the repo root comes from `--mode live` and is reproduced byte for byte by `--mode replay`. It has 518 sorted rows and passes the validator: 354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE. Of those 11, 10 come from intake and 1 (case_61) is the no-provable-obligation fallback. `--mode deterministic` differs in exactly 1 row (case_45, see below).
 
 Custom overlays: 7/7 pass. Step-aligned field accuracy is 1.000 on every field, so every sample loss is a missing step, never a wrong one.
 
@@ -44,9 +44,11 @@ Reproduce (no provider calls; everything comes from `code/.cache/llm/`):
 | `a201fb1` | Burden of proof: an existing flow or archive with no evidenced guard state is OPEN |
 | `2cfdc44` | ARCHITECTURE.md, the iteration log and handoff for the evening session |
 | `6786f09`, `212eacc` | Burden-of-proof flip audit (case_55: correct); custom overlay cases and the full metrics report |
-| (this commit) | LLM intake + hybrid decision, LLM category fallback, aligned field accuracy, model and strategy comparison, live output |
+| `d1d528b` | LLM intake + hybrid decision, LLM category fallback, aligned field accuracy, model and strategy comparison, live output |
+| `55a263e` | Skeptic agent, gate and controls (tools, loop, queue, gate, blast-radius audit, probe, negative control, model-free sweep) |
+| (next commit) | Ownership exclusivity in attribution (87 test picks refused, 36 verdicts to COMPLETE), skeptic skipped on test, replayable live output |
 
-The working tree is clean after this commit. 73 tests pass. `log.txt` (git-ignored) has every turn.
+`55a263e` adds the skeptic agent, gate and controls; the next commit adds ownership exclusivity and skips the skeptic on test. The working tree is clean after the last commit. 73 tests pass. `log.txt` (git-ignored) has every turn.
 
 **Not in git, but required:** `code/.cache/llm/` holds the 11 screenshot transcriptions. It must be shipped inside `code.zip`. Without it, deterministic runs skip every PNG and the scores above won't reproduce. `.env` is git-ignored and must never be zipped. It currently sets `PERCEPTION_MODEL=gemini-3.6-flash`, because the 3.8 and 3.7 quotas were exhausted.
 
@@ -73,7 +75,7 @@ Rejected experiments, don't retry without new evidence: deletion-run reconstruct
 1. ~~LLM intake~~, ~~screenshot-only categories (live)~~ and ~~the LLM category fallback test~~ are **done** (iterations 11–12; the fallback recovers neither inferred name, so the static map stays primary).
 2. Re-run `code/tools/intake_compare.py --model gemini-3.6-flash` once its quota resets, and fill the comparison table.
 3. Optional: a deterministic category for `screen:Account events`, so deterministic matches live on case_45.
-4. **Skeptic**: built (iteration 13, uncommitted at the time of writing). Samples: 15 CONFIRM, 0 changes, P 1.000, 32/32. Test: 30 CONFIRM, 0 changes. Negative control: 0 of 11 wrong picks caught. `python code/tools/skeptic_sweep.py` (no model) shows the gate alone would remove 80 of 207 test activity picks whose own record belongs to another user (36 verdicts, 359 steps; audit in `code/.cache/runs/skeptic_audit_sweep.md`), over the 10/25 blast-radius limit, so NOT applied. Open: rerun `--mode live --split test` after the Gemini quota resets (~06:50Z; the queue now ranks owner-conflict picks first and the cached test turns are stale), then decide with the user whether to accept `--accept-skeptic-blast-radius`.
+4. ~~Skeptic~~ **done (iterations 13 and 14)**. The skeptic (gemini-3.5-flash-lite, Groq fallback) runs on the samples (cached: 15 CONFIRM, 0 changes) and is skipped on test with `skeptic_skipped:budget`; on test it changed 0 of 33 investigations, so skipping it does not alter the output. Negative control: it caught 0 of 11 wrong picks. The model-free gate sweep found owner-conflicted activity picks, and that check is now deterministic attribution (`identity.conflicting_owner`, `pipeline.find_shared_picks`): 87 test picks refused in 81 cases, 36 verdicts INCOMPLETE -> COMPLETE, samples unchanged (spot-checked: `code/tools/ownership_spotcheck.py`). Gemini lite's free tier (500 requests a day) is spent for today; no further model calls are needed to reproduce the output.
 5. ~~Custom evaluation cases~~ **done**: 7 dataset overlays in `code/evaluation/custom_cases.py` (all pass), and metrics via `code/evaluation/main.py --write`. Candidates to add: the case_33 replica-vs-snapshot ordering and a burden-of-proof overlay.
 6. **`evaluation/usage_report.md`** from the final full run's ledger (`code/.cache/runs/run_log.jsonl` and `usage_*.json`): providers, models, calls, tokens, cost per request.
 7. **README.md** setup and run instructions, and **packaging** of `code.zip`: code, prompts, config, README and `evaluation/`, plus `code/.cache/llm/`; never `dataset/`, `.venv`, `.env` or nested archives. Submit `output.csv`, `code.zip` and `log.txt` at https://wwww.hackerrank.com/contests/hackerrank-orchestrate-october26/challenges/ghost-data-still-exists

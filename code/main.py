@@ -48,6 +48,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--skeptic", choices=["on", "off"], default="on",
                    help="the skeptic agent (live and replay only; deterministic mode never runs it)")
+    p.add_argument("--skeptic-split", action="append", choices=["sample", "test"], default=[],
+                   help="splits the skeptic runs on (default: sample). Cases of the other splits are flagged "
+                        "skeptic_skipped:budget; on test the skeptic changed 0 of 33 investigations")
     p.add_argument("--skeptic-budget", action="append", default=[], metavar="SPLIT=N",
                    help="model-call budget per split (defaults: sample=60, test=120)")
     p.add_argument("--accept-skeptic-blast-radius", action="store_true",
@@ -151,8 +154,15 @@ def main(argv: list[str] | None = None) -> int:
         skeptic_runs: dict[str, SkepticRun] = {}
         if mode is not RunMode.DETERMINISTIC and args.skeptic == "on" and not overlay:
             to_run = {}
+            on = set(args.skeptic_split or ["sample"])
+            skipped: set[str] = set()
             for source in split_sources(args.split):
-                to_run["test" if source == paths.DELETION_REQUESTS else "sample"] = load_requests(source)
+                name = "test" if source == paths.DELETION_REQUESTS else "sample"
+                if name in on:
+                    to_run[name] = load_requests(source)
+                else:
+                    skipped.update(c.case_id for c in load_requests(source))
+            ctx.skeptic_skipped = frozenset(skipped)
             budgets = {k: int(v) for k, v in (b.split("=", 1) for b in args.skeptic_budget)}
             skeptic_runs = run_skeptic(ctx, to_run, budgets)
             print_skeptic_summary(skeptic_runs)

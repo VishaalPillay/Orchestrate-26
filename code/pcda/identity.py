@@ -17,7 +17,7 @@ import csv
 import hashlib
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import IntEnum
 from pathlib import Path
@@ -206,6 +206,10 @@ class AttributedResource:
     # Supporting evidence captured after audit_at. It established ownership
     # only; it must never be cited or used for state.
     late_evidence_ids: tuple[str, ...] = ()
+    # Set on an activity pick that the ownership exclusivity rule refused: the
+    # conflicting fact and the user its identifiers resolve to.
+    conflict_fact: str = ""
+    conflict_user: str = ""
 
 
 @dataclass
@@ -366,7 +370,23 @@ class ResourceAttribution:
                     late_evidence_ids=tuple(sorted(c.late_evidence)),
                 )
             )
-        out.extend(ResourceAttribution.activity_temporal(case, lineage, out))
+        for pick in ResourceAttribution.activity_temporal(case, lineage, out):
+            # Ownership exclusivity: an activity row is a claim about timing, never about
+            # whose record it is. A record that identifiers elsewhere tie to another user
+            # is not this subject's, however close its deletion row is to reported_at.
+            hit = conflicting_owner(pick.resource_id, user_id, closure, store)
+            if hit is None:
+                out.append(pick)
+                continue
+            other, fact = hit
+            rejected.append(
+                replace(
+                    pick,
+                    reasons=pick.reasons + (f"refused: {fact.fact_id} ties {pick.resource_id} to {other}, not the subject",),
+                    conflict_fact=fact.fact_id,
+                    conflict_user=other,
+                )
+            )
         out.sort(key=lambda a: (a.system_id, a.resource_id))
         return out, rejected
 
@@ -448,6 +468,27 @@ class ResourceAttribution:
                 )
             )
         return out
+
+
+def conflicting_owner(
+    resource_id: str, subject: str, closure: IdentityClosure, store: FactStore
+) -> tuple[str, Fact] | None:
+    """(other user, fact) when an ownership-eligible fact links the resource to someone else.
+
+    Ownership-eligible: a record of the resource itself (any capture time: ownership
+    is time-invariant), or a record that names the resource as the one it was derived
+    from. Table coverage and absence facts say nothing about whose a record is. The
+    fact's identifiers must resolve, through the IdentityClosure and so under every
+    historical identifier, to users other than `subject` only; a fact that also
+    resolves to the subject is ambiguous and conflicts with nothing.
+    """
+    for fact in [*store.by_resource(resource_id), *store.linked_to(resource_id)]:
+        if fact.is_coverage or fact.kind is FactKind.ABSENCE:
+            continue
+        users = {u for u in (closure.subject_of(i) for i in fact.identifiers) if u is not None}
+        if users and subject not in users:
+            return sorted(users)[0], fact
+    return None
 
 
 # The workflow's reported_status is its own summary of the account deletion

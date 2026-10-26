@@ -20,6 +20,7 @@ from pcda.identity import (
     AttributedResource,
     IdentityClosure,
     JointActivityAttribution,
+    LinkTier,
     ResourceAttribution,
     normalize_email,
 )
@@ -63,7 +64,12 @@ class Context:
     # What the code-side gate accepted from the skeptic agent, by case_id (run_skeptic fills these).
     skeptic_adjustments: dict[str, Adjustments] = field(default_factory=dict)
     skeptic_outcomes: dict[str, str] = field(default_factory=dict)  # "case_id:resource_id" -> outcome
+    # Cases whose split the skeptic did not run on (live/replay): flagged skeptic_skipped:budget.
+    skeptic_skipped: frozenset[str] = frozenset()
     canonical: dict[str, SystemVote] = field(default_factory=dict)
+    # Activity-derived picks that two or more different subjects would each receive:
+    # resource_id -> the case_ids that picked it. A row cannot belong to two people.
+    shared_picks: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # One joint pass per (event_type, target_system); see JOINT_PASSES.
     joint: tuple[JointActivityAttribution, ...] = ()
     report: IngestReport = field(default_factory=IngestReport)
@@ -103,6 +109,7 @@ def build_context(mode: RunMode) -> Context:
         JointActivityAttribution.build(every_case, closure, store, lineage, event_type=e, target_system=t)
         for e, t, _ in JOINT_PASSES
     )
+    shared_picks = find_shared_picks(every_case, closure, store, lineage, joint)
     return Context(
         mode=mode,
         llm=llm,
@@ -118,8 +125,35 @@ def build_context(mode: RunMode) -> Context:
         skeptic=NullSkepticAgent(),
         canonical=lineage.canonical_systems(),
         joint=joint,
+        shared_picks=shared_picks,
         report=report,
     )
+
+
+ACTIVITY_TIERS = (LinkTier.ACTIVITY_TEMPORAL, LinkTier.ACTIVITY_JOINT)
+
+
+def find_shared_picks(
+    cases: list[CaseRequest],
+    closure: IdentityClosure,
+    store: FactStore,
+    lineage: LineageGraph,
+    joint: tuple[JointActivityAttribution, ...],
+) -> dict[str, tuple[str, ...]]:
+    """Activity picks (temporal or joint) that would go to more than one subject, over every request.
+
+    Built over both request files, so a case's answer never depends on --split.
+    """
+    holders: dict[str, dict[str, str]] = {}  # resource_id -> {subject: case_id}
+    for case in cases:
+        subject = closure.subject_of(normalize_email(case.email))
+        if subject is None:
+            continue
+        picks = [a for a in ResourceAttribution.for_case(case, subject, closure, store, lineage) if a.tier in ACTIVITY_TIERS]
+        picks += [j.assigned[case.case_id] for j in joint if case.case_id in j.assigned]
+        for a in picks:
+            holders.setdefault(a.resource_id, {}).setdefault(subject, case.case_id)
+    return {rid: tuple(sorted(by.values())) for rid, by in sorted(holders.items()) if len(by) > 1}
 
 
 def canonicalize(attributions: list[AttributedResource], ctx: Context) -> tuple[list[AttributedResource], list[str]]:
@@ -166,10 +200,13 @@ def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult
     flags: list[str] = []
     # Ownership uses the full store (time-invariant); state and citations use `store`.
     # Attribution runs for every resolved subject so intake can be corroborated.
-    attributions = (
-        ResourceAttribution.for_case(case, subject, ctx.closure, ctx.store, ctx.lineage)
+    attributions, rejected_links = (
+        ResourceAttribution.for_case_detailed(case, subject, ctx.closure, ctx.store, ctx.lineage)
         if subject is not None
-        else []
+        else ([], [])
+    )
+    flags.extend(
+        f"activity_pick_refused:{r.resource_id}:{r.conflict_fact}:{r.conflict_user}" for r in rejected_links if r.conflict_fact
     )
     deferred: list[AttributedResource] = []  # fallback_only joint links
     for (_, system, fallback_only), joint_pass in zip(JOINT_PASSES, ctx.joint):
@@ -178,6 +215,13 @@ def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult
             (deferred if fallback_only else attributions).append(joint)
         elif case.case_id in joint_pass.rejected:
             flags.append(f"joint_none:{system}:{joint_pass.rejected[case.case_id]}")
+    # A resource picked from activity rows for two different subjects belongs to neither pick.
+    for a in [*attributions, *deferred]:
+        sharers = ctx.shared_picks.get(a.resource_id)
+        if a.tier in ACTIVITY_TIERS and sharers:
+            flags.append(f"activity_pick_refused:{a.resource_id}:{a.evidence_ids[0] if a.evidence_ids else ''}:shared_by_{'+'.join(sharers)}")
+    attributions = [a for a in attributions if not (a.tier in ACTIVITY_TIERS and a.resource_id in ctx.shared_picks)]
+    deferred = [a for a in deferred if a.resource_id not in ctx.shared_picks]
     adj = ctx.skeptic_adjustments.get(case.case_id) if adjust else None
     if adj:
         # Accepted by the gate; the solver below verifies the consequences.
@@ -231,10 +275,13 @@ def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult
     objections = ctx.skeptic.challenge(certificate, attributions)
     flags.extend(f"skeptic:{o.kind}:{o.target}" for o in objections)
     if certificate.verdict is not Verdict.NOT_APPLICABLE:
+        skipped = case.case_id in ctx.skeptic_skipped
         for a in attributions:
-            if a.needs_skeptic:
+            if a.needs_skeptic and not skipped:
                 outcome = ctx.skeptic_outcomes.get(f"{case.case_id}:{a.resource_id}")
                 flags.append(f"skeptic:{outcome}:{a.resource_id}" if outcome else f"skeptic_pending:{a.resource_id}")
+        if skipped and any(a.needs_skeptic for a in attributions):
+            flags.append("skeptic_skipped:budget")
     flags.extend(
         f"perception_skipped:{s.evidence_id}" for s in ctx.report.skipped if s.captured_at <= case.audit_at
     )

@@ -7,7 +7,7 @@ python code/main.py --mode deterministic --split all
 python code/evaluation/score.py --diff
 ```
 
-Current (iteration 12): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (390 INCOMPLETE, 117 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
+Current (iteration 14): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
 
 Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` comes from `--mode live` and is reproduced byte for byte by `--mode replay` from `code/.cache/llm/`. Model stages: screenshot perception, LLM intake and the category fallback. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row and scores the same on samples.
 
@@ -34,6 +34,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 12 | LLM category fallback | CATEGORY_MODEL for names the static map does not cover; masked examples, 15 categories + rule text, answer validated against the list | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept |
 | 12a | LLM-only categories for the inferred names | `PCDA_DISABLE_INFERRED=1`: the LLM must categorize case_10 and case_12's event names | 0.989 / 0.896 / 0.940 | 30/32 (0.938) | 18/32 | Rejected (static map stays primary) |
 | 13 | Skeptic agent | Tool-calling loop (gemini-3.5-flash-lite, Groq gpt-oss-120b fallback) over a risk-ordered queue, 6 read-only tools, code-side gate, hard call budget (sample 60, test 120) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as a no-change guard; no effect on `output.csv` (see below) |
+| 14 | Ownership exclusivity in attribution | The model caught 0 of 11 wrong picks in the negative control and the model-free gate found 75 owner-conflicted picks, so that gate check became deterministic: an activity_temporal or activity_joint pick is refused if an ownership-eligible fact ties the resource to another user, or if two different subjects would receive it | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (36 test verdicts INCOMPLETE -> COMPLETE) |
 
 ### Notes per iteration
 
@@ -83,7 +84,29 @@ The test run stopped early: gemini-3.5-flash-lite's free-tier limit of 500 reque
 
 The 80 are activity_temporal picks (search, export, support and similar resources chosen as the only deletion_worker row near `reported_at`) whose own record carries another user's identifiers: in case_107 and case_108 the same `search_1752` is picked for two different people, and its log records resolve to a third user. The samples show none, so the sample precision of 1.000 does not exercise it. This exceeds the blast-radius limit (10 verdicts, 25 steps), so none of it was applied; `code/.cache/runs/skeptic_audit_sweep.md` lists every removal with its cited row, the gate checks and the before/after steps.
 
-The queue now ranks picks owned by another user first (87 test targets), but the test run with that queue has not been done: the Gemini quota resets about 06:50Z. Until then a replay of the test split finds no cached turns, takes the error path, and leaves `output.csv` unchanged.
+The queue now ranks picks owned by another user first (87 test targets). That test run was not done (decision: no further model calls on test). The skeptic therefore runs on the samples only (cached), and test cases are flagged `skeptic_skipped:budget`, so `--mode replay --split all` reproduces the live output byte for byte. On test the skeptic changed 0 of its 33 investigations (30 CONFIRM, 3 provider errors), so skipping it does not alter the output. The gate check the model could not use was promoted into deterministic attribution (iteration 14).
+
+### Iteration 14: ownership exclusivity
+
+`identity.conflicting_owner` and `pipeline.find_shared_picks`. An activity-derived pick (activity_temporal or activity_joint, any system) is refused when
+(1) an ownership-eligible fact (a record of the resource itself, or one that names it as its `source_resource_id`; never table coverage or an absence) has identifiers that resolve, through the IdentityClosure and so under every historical identifier, only to users other than the subject, or
+(2) the same resource would be picked for two different subjects, over all 550 requests. Identifier-based links are untouched. Each refusal is flagged `activity_pick_refused:<resource>:<fact_id>:<user>` (clause 1) or `activity_pick_refused:<resource>:<activity_id>:shared_by_<cases>` (clause 2).
+
+Spot check before applying (`code/tools/ownership_spotcheck.py`, seed 20261025): 75 of 207 test picks and 0 of 12 sample picks are refused by clause 1. 10 of the 75 drawn at random plus case_107 and case_108 were all confirmed: the conflicting fact's identifiers resolve to one other user, that user shares no identifier with the subject (no closure conflict exists in the data), and no identifier of the subject is on the fact. Clause 2 refuses 12 account picks in 12 test cases (a total of 87 refused picks in 81 cases).
+
+Measured against the committed output of the iteration-13 code (live mode):
+
+| | Samples | Test |
+|---|---|---|
+| Step P / R / F1, status | 1.000 / 0.927 / 0.962, 32/32 (unchanged) | n/a |
+| Picks refused | 0 | 87 picks in 81 cases (clause 1: 75 picks in 69 cases; clause 2: 12 picks in 12 cases) |
+| Verdict changes | 0 | 36, all INCOMPLETE -> COMPLETE |
+| Steps removed / added | 0 / 0 | 287 / 81 |
+| Removed by operation | | REPORT_REMAINING_RECORD 69, DELETE_RECORD 69, VERIFY_RECORD_ABSENT 107, VERIFY_RECORD_PRESENT 36, REPORT_EXPOSED_PII 2, REDACT_RECORD 2, VERIFY_RECORD_REDACTED 2 |
+| Added by operation | | VERIFY_RECORD_PRESENT 36, VERIFY_RECORD_ABSENT 24, VERIFY_RECORD_REDACTED 7, VERIFY_DATA_FLOW_DISABLED 7, VERIFY_RESTORE_BLOCKED 7 |
+| New NOT_APPLICABLE fallbacks | | 0 (still the 10 from intake plus case_61) |
+
+The added steps are the evidence-citing verifications that a COMPLETE case carries and an INCOMPLETE one does not. Account steps changed in 16 cases, every one of them a case whose own account pick was refused: 14 lost it and 2 got a different account from the joint pass (case_206: account_1065 -> account_4522; case_328: account_8264 -> account_206), which now sees them as open. No case without a refusal changed its accounts.
 
 ## Model and strategy comparison
 

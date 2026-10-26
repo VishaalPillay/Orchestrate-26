@@ -82,6 +82,7 @@ class FactStore:
         self._facts: dict[str, Fact] = {}
         self._by_identifier: dict[str, set[str]] = defaultdict(set)
         self._by_resource: dict[str, set[str]] = defaultdict(set)
+        self._linked_to: dict[str, set[str]] = defaultdict(set)  # derived-from resource -> linking facts
         for f in facts:
             self.add(f)
 
@@ -93,6 +94,8 @@ class FactStore:
             self._by_identifier[ident].add(fact.fact_id)
         if fact.resource_id is not None:
             self._by_resource[fact.resource_id].add(fact.fact_id)
+        if fact.attrs.get("via") == "source_resource_id" and fact.attrs.get(ATTR_LINKED):
+            self._linked_to[fact.attrs[ATTR_LINKED]].add(fact.fact_id)
 
     def __len__(self) -> int:
         return len(self._facts)
@@ -108,6 +111,10 @@ class FactStore:
 
     def by_resource(self, resource_id: str) -> list[Fact]:
         return self._sorted(self._by_resource.get(resource_id, ()))
+
+    def linked_to(self, resource_id: str) -> list[Fact]:
+        """Facts whose record names resource_id as the one it was derived from (source_resource_id)."""
+        return self._sorted(self._linked_to.get(resource_id, ()))
 
     def coverage(self) -> list[Fact]:
         return [f for f in self._facts.values() if f.is_coverage]
