@@ -225,6 +225,8 @@ def solve(
         )
         if cat.unknown_names:
             flags.append(f"category_unknown_name:{res.resource_id}:{'|'.join(cat.unknown_names)}")
+        if cat.source.startswith("llm:"):
+            flags.append(f"category_llm:{res.resource_id}:{cat.source[4:]}->{cat.category}")
         if cat.conflicts:
             flags.append(f"category_conflict:{res.resource_id}:{cat.category} vs {'|'.join(cat.conflicts)}")
         if cat.category is None:

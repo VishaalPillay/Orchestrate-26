@@ -146,9 +146,192 @@ class RuleIntakeAgent:
         )
 
 
+# Request kinds the LLM may answer with: the rule agent's kinds, minus AMBIGUOUS.
+LLM_KINDS: Final[tuple[str, ...]] = (
+    KIND_DELETION, "ACCESS", "EXPORT", "CORRECTION", "EMAIL_CHANGE", "PHONE_CHANGE",
+    "LOGIN_HELP", "MARKETING_OPT_OUT", "NON_DELETION",
+)
+INTAKE_TASK: Final = "intake.batch"
+INTAKE_MODEL_ENV: Final = "INTAKE_MODEL"
+BATCH_SIZE: Final = 20
+INTAKE_SCHEMA: Final[dict[str, object]] = {"type": "object", "required": ["results"]}
+
+
+@dataclass(frozen=True)
+class LLMIntakeAnswer:
+    """One validated LLM answer. Only answers whose evidence_span is verbatim in the text survive."""
+
+    case_id: str
+    authorizes_deletion: bool
+    request_kind: str
+    language: str | None
+    confidence: float | None
+    evidence_span: str
+    rationale: str
+
+    def as_result(self) -> IntakeResult:
+        return IntakeResult(
+            self.case_id, self.authorizes_deletion, self.language, self.request_kind, (),
+            f"llm: {self.rationale} [span {self.evidence_span!r}]",
+        )
+
+
+def _span_in(span: str, text: str) -> bool:
+    if len(span.strip()) < 3:
+        return False
+    if span in text:
+        return True
+    return " ".join(span.split()) in " ".join(text.split())  # whitespace-only differences
+
+
+def _block(case_id: str, text: str) -> str:
+    # The request is data: fenced, and any closing fence inside it is broken up.
+    return f'<request id="{case_id}">\n{text.replace("</request", "</ request")}\n</request>'
+
+
 class LLMIntakeAgent:
-    def __init__(self, client: LLMClient) -> None:
+    """Batch LLM intake. `prepare` must see every case first; `answer` then serves one.
+
+    Batches are fixed by sorted case_id, so the cache keys do not depend on
+    which split is run. An answer is discarded (with the reason kept) when its
+    evidence_span is not a substring of that request's text, when a field is
+    outside the allowed enum, or when the case is missing from the reply.
+    """
+
+    def __init__(self, client: LLMClient, batch_size: int = BATCH_SIZE, model_env: str = INTAKE_MODEL_ENV) -> None:
         self._client = client
+        self._batch_size = batch_size
+        self._model_env = model_env
+        self.answers: dict[str, LLMIntakeAnswer] = {}
+        self.rejected: dict[str, str] = {}  # case_id -> why the LLM answer was not used
+        self.calls = 0
+
+    def prepare(self, cases: list[tuple[str, str]]) -> None:
+        """cases: (case_id, request_text). One call per batch of `batch_size`."""
+        from pcda.agents import prompts
+        from pcda.llm.client import LLMRequest, LLMUnavailable
+
+        system, user = prompts.load(INTAKE_TASK)
+        ordered = sorted(cases)
+        for i in range(0, len(ordered), self._batch_size):
+            batch = ordered[i:i + self._batch_size]
+            blocks = "\n\n".join(_block(cid, text) for cid, text in batch)
+            request = LLMRequest(
+                task=INTAKE_TASK, prompt=user.replace("{{REQUESTS}}", blocks), system=system,
+                model_env=self._model_env, schema=INTAKE_SCHEMA,
+            )
+            try:
+                resp = self._client.complete(request)
+            except LLMUnavailable as exc:  # live: fall back to rules; replay misses propagate (CacheMiss)
+                for cid, _ in batch:
+                    self.rejected[cid] = f"llm unavailable: {exc}"[:200]
+                continue
+            self.calls += 0 if resp.cached else 1
+            self._ingest(batch, resp.parsed)
+
+    def _ingest(self, batch: list[tuple[str, str]], parsed: object) -> None:
+        texts = dict(batch)
+        rows = parsed.get("results") if isinstance(parsed, dict) else None
+        seen: set[str] = set()
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or row.get("case_id") not in texts:
+                continue
+            cid = str(row["case_id"])
+            if cid in seen:
+                self.rejected[cid] = "duplicate answer in batch"
+                self.answers.pop(cid, None)
+                continue
+            seen.add(cid)
+            span = str(row.get("evidence_span") or "")
+            kind = str(row.get("request_kind") or "")
+            auth = row.get("authorizes_deletion")
+            if not isinstance(auth, bool):
+                self.rejected[cid] = f"authorizes_deletion not a boolean: {auth!r}"
+            elif kind not in LLM_KINDS:
+                self.rejected[cid] = f"request_kind {kind!r} not allowed"
+            elif auth != (kind == KIND_DELETION):
+                self.rejected[cid] = f"authorizes_deletion={auth} contradicts request_kind {kind}"
+            elif not _span_in(span, texts[cid]):
+                self.rejected[cid] = f"evidence_span not in request text: {span!r}"
+            else:
+                conf = row.get("confidence")
+                self.answers[cid] = LLMIntakeAnswer(
+                    cid, auth, kind, str(row.get("language") or "") or None,
+                    float(conf) if isinstance(conf, (int, float)) else None,
+                    span, str(row.get("rationale") or "")[:300],
+                )
+        for cid in texts:
+            if cid not in seen and cid not in self.rejected:
+                self.rejected[cid] = "no answer for this case in the batch reply"
+
+    def answer(self, case_id: str) -> LLMIntakeAnswer | None:
+        return self.answers.get(case_id)
 
     def classify(self, case_id: str, request_text: str) -> IntakeResult:
-        raise NotImplementedError("intake.LLMIntakeAgent.classify")
+        a = self.answers.get(case_id)
+        if a is None:
+            from pcda.llm.client import LLMUnavailable
+
+            raise LLMUnavailable(f"{case_id}: {self.rejected.get(case_id, 'not prepared')}")
+        return a.as_result()
+
+
+# A non-deletion answer overrides the rules only when its span itself refuses or
+# limits deletion. "Can you verify that my account was deleted?" is not a negation.
+_NEGATION: Final = _rx(
+    r"\b(?:not|no|never|don'?t|doesn'?t|without|instead|rather than|only|keep|stop)\b",
+    r"\bne\b.*\bpas\b", r"\bnicht\b", r"\bnão\b", r"\bno\s+\w+", r"しない", r"않",
+)
+
+
+def is_negation(span: str) -> bool:
+    return bool(_NEGATION.search(span))
+
+
+@dataclass(frozen=True)
+class IntakeDecision:
+    result: IntakeResult
+    source: str  # "agree" | "rules" | "corroboration" | "llm_safety" | "rules_only"
+    flags: tuple[str, ...]
+    rule: IntakeResult
+    llm: LLMIntakeAnswer | None
+    llm_rejected: str = ""
+    corroboration: tuple[str, ...] = ()
+
+    @property
+    def disagreement(self) -> bool:
+        return self.llm is not None and self.llm.authorizes_deletion != self.rule.authorizes_deletion
+
+
+def decide_intake(
+    rule: IntakeResult,
+    llm: LLMIntakeAnswer | None,
+    corroboration: tuple[str, ...],
+    llm_rejected: str = "",
+) -> IntakeDecision:
+    """Combine rules, the validated LLM answer and CLASSIFY_REQUEST corroboration.
+
+    * no usable LLM answer (none, or its span failed validation): rules win;
+    * agree: done;
+    * disagree: flag intake_conflict:llm; a CLASSIFY_REQUEST non-deletion row
+      on the subject's resources decides (NOT_APPLICABLE);
+    * otherwise an LLM non-deletion answer wins only when its validated span
+      is itself a negation ("not asking for deletion", "keep my account"),
+      because an unauthorized irreversible deletion is the worse failure;
+      a non-negating span ("verify that my account was deleted") leaves the
+      rules in charge;
+    * a rule non-deletion answer (an explicit guard) is never overridden by
+      an LLM deletion answer.
+    """
+    if llm is None:
+        flags = ("intake_llm_rejected",) if llm_rejected and not llm_rejected.startswith("llm unavailable") else ()
+        return IntakeDecision(rule, "rules_only", flags, rule, None, llm_rejected, corroboration)
+    if llm.authorizes_deletion == rule.authorizes_deletion:
+        return IntakeDecision(rule, "agree", (), rule, llm, "", corroboration)
+    flags = ("intake_conflict:llm",)
+    if corroboration:
+        chosen = rule if rule.authorizes_deletion is False else llm.as_result()
+        return IntakeDecision(chosen, "corroboration", flags, rule, llm, "", corroboration)
+    if llm.authorizes_deletion is False and is_negation(llm.evidence_span):
+        return IntakeDecision(llm.as_result(), "llm_safety", flags, rule, llm, "", corroboration)
+    return IntakeDecision(rule, "rules", flags, rule, llm, "", corroboration)

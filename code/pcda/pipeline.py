@@ -10,9 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 
 from pcda import paths
-from pcda.agents.intake import IntakeAgent, IntakeResult, LLMIntakeAgent, RuleIntakeAgent
+from pcda.agents.intake import IntakeDecision, IntakeResult, LLMIntakeAgent, RuleIntakeAgent, decide_intake
 from pcda.agents.perception import LLMPerceptionAgent
-from pcda.agents.skeptic import LLMSkepticAgent, NullSkepticAgent, SkepticAgent
+from pcda.agents.skeptic import NullSkepticAgent, SkepticAgent
 from pcda.cases import CaseRequest, load_requests
 from pcda.category import CategoryResolver
 from pcda.facts import FactStore
@@ -57,7 +57,8 @@ class Context:
     lineage: LineageGraph
     store: FactStore
     resolver: CategoryResolver
-    intake: IntakeAgent
+    rule_intake: RuleIntakeAgent
+    llm_intake: LLMIntakeAgent | None  # None in deterministic mode
     skeptic: SkepticAgent
     canonical: dict[str, SystemVote] = field(default_factory=dict)
     # One joint pass per (event_type, target_system); see JOINT_PASSES.
@@ -72,6 +73,7 @@ class CaseResult:
     intake: IntakeResult
     # CLASSIFY_REQUEST "non-deletion" activity ids on the subject's resources.
     intake_evidence: tuple[str, ...] = ()
+    decision: IntakeDecision | None = None
 
 
 def build_context(mode: RunMode) -> Context:
@@ -87,6 +89,11 @@ def build_context(mode: RunMode) -> Context:
     deterministic = mode is RunMode.DETERMINISTIC
     # Built over every request in both files, so a case's answer never depends on --split.
     every_case = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
+    llm_intake: LLMIntakeAgent | None = None
+    if not deterministic:
+        # Fixed batches over all 550 requests: one cache key set for every split.
+        llm_intake = LLMIntakeAgent(llm)
+        llm_intake.prepare([(c.case_id, c.request_text) for c in every_case])
     joint = tuple(
         JointActivityAttribution.build(every_case, closure, store, lineage, event_type=e, target_system=t)
         for e, t, _ in JOINT_PASSES
@@ -99,9 +106,11 @@ def build_context(mode: RunMode) -> Context:
         closure=closure,
         lineage=lineage,
         store=store,
-        resolver=CategoryResolver(llm),
-        intake=RuleIntakeAgent() if deterministic else LLMIntakeAgent(llm),
-        skeptic=NullSkepticAgent() if deterministic else LLMSkepticAgent(llm),
+        resolver=CategoryResolver(llm, {c: f"{t.condition} -> {t.action}" for c, t in templates.items()}),
+        rule_intake=RuleIntakeAgent(),
+        llm_intake=llm_intake,
+        # The LLM skeptic is not implemented; every mode uses the advisory no-op.
+        skeptic=NullSkepticAgent(),
         canonical=lineage.canonical_systems(),
         joint=joint,
         report=report,
@@ -147,7 +156,7 @@ def canonicalize(attributions: list[AttributedResource], ctx: Context) -> tuple[
 
 
 def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
-    intake = ctx.intake.classify(case.case_id, case.request_text)
+    rule_intake = ctx.rule_intake.classify(case.case_id, case.request_text)
     subject = ctx.closure.subject_of(normalize_email(case.email))
     flags: list[str] = []
     # Ownership uses the full store (time-invariant); state and citations use `store`.
@@ -168,11 +177,18 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
     attributions, system_flags = canonicalize(attributions, ctx)
     flags.extend(system_flags)
 
-    # Corroboration only: text stays the decision source in deterministic mode.
+    # Corroboration: CLASSIFY_REQUEST non-deletion rows on the subject's resources.
     owned = {a.resource_id for a in attributions}
     support = tuple(
         c.activity_id for c in ctx.lineage.non_deletion_classifications(case.audit_at) if c.resource_id in owned
     )
+    llm_answer = ctx.llm_intake.answer(case.case_id) if ctx.llm_intake else None
+    llm_rejected = ctx.llm_intake.rejected.get(case.case_id, "") if ctx.llm_intake else ""
+    decision = decide_intake(rule_intake, llm_answer, support, llm_rejected)
+    intake = decision.result
+    flags.extend(decision.flags)
+    if decision.source != "rules_only":
+        flags.append(f"intake_source:{decision.source}")
     for activity_id in support:
         flags.append(
             f"intake_conflict:{activity_id}" if intake.authorizes_deletion else f"intake_support:{activity_id}"
@@ -213,4 +229,4 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
             for o in certificate.obligations
             if o.status is not ObligationStatus.DISCHARGED or o.resource_id not in emitted
         )
-    return CaseResult(certificate.with_flags(tuple(flags)), steps, intake, support)
+    return CaseResult(certificate.with_flags(tuple(flags)), steps, intake, support, decision)

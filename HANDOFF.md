@@ -13,12 +13,15 @@ Samples (32 cases, `python code/evaluation/score.py --diff`):
 | evidence_id accuracy on matched steps | 179/179 |
 | Exact-sequence matches | 20/32 |
 
-Evaluation set: `output.csv` at the repo root has 518 sorted rows and passes the validator: 390 INCOMPLETE, 117 COMPLETE, 11 NOT_APPLICABLE. Of those 11, 10 come from intake and 1 (case_61) is the no-provable-obligation fallback.
+Evaluation set: `output.csv` at the repo root comes from `--mode live` and is reproduced byte for byte by `--mode replay`. It has 518 sorted rows and passes the validator: 390 INCOMPLETE, 117 COMPLETE, 11 NOT_APPLICABLE. Of those 11, 10 come from intake and 1 (case_61) is the no-provable-obligation fallback. `--mode deterministic` differs in exactly 1 row (case_45, see below).
 
-Reproduce (deterministic, no provider calls; screenshot transcriptions come from `code/.cache/llm/`):
+Custom overlays: 7/7 pass. Step-aligned field accuracy is 1.000 on every field, so every sample loss is a missing step, never a wrong one.
+
+Reproduce (no provider calls; everything comes from `code/.cache/llm/`):
 
 ```bash
-.venv/Scripts/python.exe code/main.py --mode deterministic --split all
+.venv/Scripts/python.exe code/main.py --mode replay --split all          # byte-identical to the committed output.csv
+.venv/Scripts/python.exe code/main.py --mode deterministic --split all   # rules only; differs in case_45
 .venv/Scripts/python.exe code/evaluation/score.py --diff
 .venv/Scripts/python.exe -m pytest code/tests -q
 .venv/Scripts/python.exe code/evaluation/custom_cases.py      # 7 overlays, all pass
@@ -39,7 +42,9 @@ Reproduce (deterministic, no provider calls; screenshot transcriptions come from
 | `1709f3b` | One OpenAI-compatible LLM client (Gemini + Groq), cache, ledger, perception agent, image grounding |
 | `d00e1fc` | Perception on gemini-3.6-flash with resource-id prompt rules |
 | `a201fb1` | Burden of proof: an existing flow or archive with no evidenced guard state is OPEN |
-| (this commit) | ARCHITECTURE.md, the iteration log and this file brought up to date |
+| `2cfdc44` | ARCHITECTURE.md, the iteration log and handoff for the evening session |
+| `6786f09`, `212eacc` | Burden-of-proof flip audit (case_55: correct); custom overlay cases and the full metrics report |
+| (this commit) | LLM intake + hybrid decision, LLM category fallback, aligned field accuracy, model and strategy comparison, live output |
 
 The working tree is clean after this commit. 73 tests pass. `log.txt` (git-ignored) has every turn.
 
@@ -47,12 +52,12 @@ The working tree is clean after this commit. 73 tests pass. `log.txt` (git-ignor
 
 ## Open issues
 
-1. **Live and replay modes stop at intake.** `LLMIntakeAgent.classify` raises NotImplementedError, so `--mode live|replay` exits with "skeleton: stage not implemented" before any case runs. Only deterministic mode produces output. Screenshot perception runs through `code/tools/perceive_images.py`.
-2. **Screenshot-only audit records have no category.** `audit_record_001`, `002`, `004`, `005` and `006` (evidence_37) are flagged `category_unknown`, because their only fact has table `screen:Account events` and they have no activity row. `audit_record_003` resolves through an activity row. Fix idea: let a perception fact fall back to the category of its canonical system (`security_service` → SECURITY_AUDIT_LOG via `_ACTIVITY_TARGETS`), or add the screen title to the inferred list. Affects the cases whose subject is `user_03`.
+1. ~~Live and replay modes stop at intake~~ **resolved**: the LLM intake runs, and replay reproduces live byte for byte. The skeptic is still the no-op in every mode.
+2. **Screenshot-only audit records have no category in deterministic mode only.** In live/replay the LLM category fallback maps `screen:Account events` to SECURITY_AUDIT_LOG (case_45). Deterministic still flags them: `audit_record_001`, `002`, `004`, `005` and `006` (evidence_37) are flagged `category_unknown`, because their only fact has table `screen:Account events` and they have no activity row. `audit_record_003` resolves through an activity row. Fix idea: let a perception fact fall back to the category of its canonical system (`security_service` → SECURITY_AUDIT_LOG via `_ACTIVITY_TARGETS`), or add the screen title to the inferred list. Affects the cases whose subject is `user_03`.
 3. **116 `unknown_state` audit records.** Their only evidence was captured after `audit_at`. In INCOMPLETE cases they are still verified with `""`, which matches gold, but in COMPLETE cases they are dropped from the steps. That's probably right, and unverified on the evaluation set.
 4. **case_61 is the only fallback.** `object_19` appears only in activity-catalog rows: no fact, and an unknown category (`object_storage`). Nothing on any screen decides it.
 5. **Activity-joint outliers.** case_45 (row 35 hours before `reported_at`) and case_493 (−131 min) are accepted picks far outside the sample timing; both are flagged `skeptic_pending`. The skeptic is a no-op in deterministic mode.
-6. **LLM quota.** The free tier exhausted gemini-3.8-flash and gemini-3.7-flash today. gemini-3.6-flash, 3.5-flash, 3.5-flash-lite and 3.1-flash-lite answered a probe. Groq's `gpt-oss-120b` rejects images; Groq's `qwen/qwen3.8-27b` accepts images ≥ 32 px and could be the vision fallback. Calls can take 2 minutes; use `LLM_TIMEOUT_S=300`.
+6. **LLM quota** (gemini-3.6-flash also ran out during the intake comparison, so its column is pending). The free tier exhausted gemini-3.8-flash and gemini-3.7-flash today. gemini-3.6-flash, 3.5-flash, 3.5-flash-lite and 3.1-flash-lite answered a probe. Groq's `gpt-oss-120b` rejects images; Groq's `qwen/qwen3.8-27b` accepts images ≥ 32 px and could be the vision fallback. Calls can take 2 minutes; use `LLM_TIMEOUT_S=300`.
 7. **`check_attribution.py` doesn't run the joint passes,** so its 90/111 understates current attribution.
 
 ## Known accepted misses (samples, 14 steps)
@@ -65,9 +70,9 @@ Rejected experiments, don't retry without new evidence: deletion-run reconstruct
 
 ## TODO for tomorrow (in order)
 
-1. **LLM intake** (`agents/intake.py`, `INTAKE_MODEL`, prompt in `agents/prompts.md`) behind the same interface. Keep the rule agent as a guard: an LLM answer that contradicts an explicit rule guard is flagged, not applied. Compare it on all 550 texts against the rule agent; the 10 CLASSIFY_REQUEST rows are corroboration. This also unblocks `--mode live` and `--mode replay`.
-2. **Category for screenshot-only records** (open issue 2), measured on samples and on the affected evaluation cases.
-3. **LLM category fallback test:** remove `INFERRED_FROM_EVIDENCE`, run the fallback (`CATEGORY_MODEL`), and check it recovers MARKETING_PROFILE and SECONDARY_IDENTIFIER. Keep the static entries unless the fallback is perfect.
+1. ~~LLM intake~~, ~~screenshot-only categories (live)~~ and ~~the LLM category fallback test~~ are **done** (iterations 11–12; the fallback recovers neither inferred name, so the static map stays primary).
+2. Re-run `code/tools/intake_compare.py --model gemini-3.6-flash` once its quota resets, and fill the comparison table.
+3. Optional: a deterministic category for `screen:Account events`, so deterministic matches live on case_45.
 4. **Skeptic** (`SKEPTIC_MODEL`) on `activity_temporal` and `activity_joint` picks, starting with case_45 and case_493. It stays advisory only.
 5. ~~Custom evaluation cases~~ **done**: 7 dataset overlays in `code/evaluation/custom_cases.py` (all pass), and metrics via `code/evaluation/main.py --write`. Candidates to add: the case_33 replica-vs-snapshot ordering and a burden-of-proof overlay.
 6. **`evaluation/usage_report.md`** from the final full run's ledger (`code/.cache/runs/run_log.jsonl` and `usage_*.json`): providers, models, calls, tokens, cost per request.

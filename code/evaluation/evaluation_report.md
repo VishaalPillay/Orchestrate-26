@@ -7,9 +7,9 @@ python code/main.py --mode deterministic --split all
 python code/evaluation/score.py --diff
 ```
 
-Current (iteration 10): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (390 INCOMPLETE, 117 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
+Current (iteration 12): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (390 INCOMPLETE, 117 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
 
-Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. Every scored run is deterministic. Screenshot perception is read from the LLM cache recorded by one live run (`code/tools/perceive_images.py --mode live`); no other stage calls a model.
+Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` comes from `--mode live` and is reproduced byte for byte by `--mode replay` from `code/.cache/llm/`. Model stages: screenshot perception, LLM intake and the category fallback. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row and scores the same on samples.
 
 ## Iteration log
 
@@ -29,6 +29,10 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 9a | Newer snapshot overrides older record fact | Experiment: a strictly newer non-vacuous covering snapshot marks a DELETE-rule record absent | 1.000 / 0.896 / 0.945 | 30/32 (0.938) | n/a | Reverted |
 | 9b | Perception model and prompt fix | `PERCEPTION_MODEL` moved from gemini-3.8-flash (quota exhausted) to gemini-3.6-flash, since gemini-3.7-flash was also over quota and a one-call probe showed 3.6 has quota and accepts images. Resource-id rules added to the prompt; a misplaced but unique visible id is adopted in grounding | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept |
 | 10 | Burden of proof for guards | A flow or archive that exists at `audit_at` but has no evidenced disabled or blocked state is an OPEN risk citing its existence fact | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept |
+| 11 | LLM intake + hybrid decision | gemini-3.5-flash-lite, 20 requests per call, fenced as data, verbatim evidence_span validated in code; rules, LLM and CLASSIFY_REQUEST corroboration combined by `decide_intake` | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept |
+| 11a | LLM safety branch without a negation check | First version let any validated non-deletion span win a disagreement | would have been 26/32: 6 sample deletion audits (10, 21, 26, 27, 28, 30) turned NOT_APPLICABLE on gpt-oss-120b answers | n/a | n/a | Fixed before use |
+| 12 | LLM category fallback | CATEGORY_MODEL for names the static map does not cover; masked examples, 15 categories + rule text, answer validated against the list | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept |
+| 12a | LLM-only categories for the inferred names | `PCDA_DISABLE_INFERRED=1`: the LLM must categorize case_10 and case_12's event names | 0.989 / 0.896 / 0.940 | 30/32 (0.938) | 18/32 | Rejected (static map stays primary) |
 
 ### Notes per iteration
 
@@ -42,7 +46,40 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 - **9b, model switch.** Compared again record by record against the screenshots: all 3 first-pass misses are recovered (`analytics_7438`, `support_1034`, `support_9538`) and there are no hallucinated records. On evidence_60, gemini-3.6-flash put `marketing_001` among the identifiers instead of in resource_id; grounding adopts it because it is the only id-shaped value transcribed for that record (two candidates would be dropped, never guessed). Records per image: 04: 2, 09: 2, 14: 2, 19: 1, 23: 4, 28: 1, 32: 4, 37: 6, 42: 0, 46: 0, 60: 1. Evaluation-set fallbacks fall from 4 to 2 (cases 50 and 53 become INCOMPLETE). The remaining two are genuine unknowns: case_55's backup shows no restore setting and case_61's `object_19` is on no screen. Usage for the run that produced this output: 10 calls plus 1 retry, about 19.6k input and 10.7k output tokens on gemini-3.6-flash.
 - **10, burden of proof.** The spec says COMPLETE requires that no sync or restore path can recreate the data, so missing proof of safety is not safety. On samples the rule never fires: every sample flow and backup has an evidenced state, which leaves the scores unchanged but means the samples neither confirm nor contradict it. On the evaluation set it changes one row: case_55 goes from NOT_APPLICABLE to INCOMPLETE, with REPORT_RESTORE_RISK on `backup_9287` citing evidence_32 (archive visible on screen, no restore setting). case_61 is unchanged and is now the only fallback: `object_19` has activity-catalog rows but no fact, so its existence is not evidenced, and its category (`object_storage`) is unknown. **Flip audit** (all verdicts compared with the run before this rule): 1 flip, case_55. Its cited presence is the evidence_32 screenshot (captured 04-29 09:00 before audit_at 04-30 11:00). Checked by eye, that screen has no restore field at all. The only state fact for `backup_9287` anywhere is evidence_01 `restore_candidate_evaluated eligible=true deletion_block=false` (ACTIVE), observed 09-15, five months after audit_at. A raw search for "9287" finds no other form of the id. Classification: (a) no state proof at or before audit_at, and (c) screenshot-only presence; no parser bug (b). The later ACTIVE state agrees with the INCOMPLETE verdict.
 
-## Remaining sample losses after iteration 10
+- **11, LLM intake.** `decide_intake`: no usable LLM answer means the rules decide. When the two agree, the case is done. When they disagree, it is flagged `intake_conflict:llm`, and a CLASSIFY_REQUEST non-deletion row on the subject's resources decides. Otherwise an LLM non-deletion answer wins only if its validated span is itself a negation. A rule guard is never overridden by an LLM deletion answer. On samples the one disagreement (case_25, "tell me whether the account … have already been removed") stays with the rules, which matches gold. All 550 answers from gemini-3.5-flash-lite passed span validation.
+- **11a, bug found and fixed.** The first run sent every batch to the Groq fallback: gemini-3.5-flash-lite rejects `reasoning_effort: "none"` with HTTP 400. The client now retries once at `"low"` and remembers that per model. Groq's gpt-oss-120b classified 6 sample deletion audits ("Can you verify that my account was deleted?") as non-deletion. Without a negation check the safety branch would have made all 6 NOT_APPLICABLE. The rule now requires a negating span, as specified. Those Groq answers had been cached under the Gemini key and were purged before the comparison.
+- **12, category fallback.** The model is called only when no static name decides a resource. It runs before the activity-target fallback, never in deterministic mode, and it is cached per name. On the evaluation set it mapped the screenshot-only `screen:Account events` records (`audit_record_001`, `002`, `004`, `005` and `006`, case_45) to SECURITY_AUDIT_LOG. That is the one row where live output differs from deterministic.
+- **12a, LLM-only for inferred names: rejected.** The model put both case_10's `contact_query_completed` and case_12's `contact_lookup_completed` (+`email_opt_in`) under PRODUCT_TELEMETRY ("operational events … function as telemetry"). Gold implies SECONDARY_IDENTIFIER and MARKETING_PROFILE. The static map stays primary.
+
+## Model and strategy comparison
+
+### a. Category fallback (samples)
+
+| Strategy | case_10 `contact_query_completed` | case_12 `contact_lookup_completed` + `email_opt_in` | Step P / R / F1 | Status | Exact |
+|---|---|---|---|---|---|
+| Static only (deterministic) | SECONDARY_IDENTIFIER (inferred list) | MARKETING_PROFILE (inferred list) | 1.000 / 0.927 / 0.962 | 32/32 | 20/32 |
+| LLM only for those names (`PCDA_DISABLE_INFERRED=1`, gemini-3.5-flash-lite) | PRODUCT_TELEMETRY ✗ | PRODUCT_TELEMETRY ✗ | 0.989 / 0.896 / 0.940 | 30/32 | 18/32 |
+| Combined (static first, LLM for unmapped names) | SECONDARY_IDENTIFIER | MARKETING_PROFILE | 1.000 / 0.927 / 0.962 | 32/32 | 20/32 |
+
+The LLM recovers neither name. Its rationales describe the record shape ("operational events … telemetry") rather than what the event says: a contact-index lookup, a marketing opt-in. The combined strategy equals static-only on samples, because no sample name is unmapped. Its value shows on the evaluation set (case_45, above). The LLM-only variant cost 2 calls (1,115 input and 69 output tokens).
+
+### b. Intake model comparison (all 550 requests, 28 batches of 20)
+
+| Model | Answered (span valid) | Discarded | Agree with rules | Disagree | request_kind agree | Calls | Input tokens | Output tokens |
+|---|---|---|---|---|---|---|---|---|
+| gemini-3.5-flash-lite (`reasoning_effort` low) | 550 | 0 | 549 | 1 (case_25) | 548 | 28 | 40,194 | 50,752 |
+| openai/gpt-oss-120b via Groq (fallback, first run) | 544 | 6 (spans shortened with "…") | 538 | 6 (cases 10, 21, 26, 27, 28, 30) | n/a | 28 | 39,752 | 46,352 |
+| gemini-3.6-flash | 0 | 550 | n/a | n/a | n/a | 0 (84 attempts, all HTTP 429 quota) | 0 | 0 |
+
+gemini-3.6-flash could not be measured today: its free-tier quota was exhausted by the perception runs. Re-run it with `python code/tools/intake_compare.py --model gemini-3.6-flash` after the quota resets. Every disagreement for either model that answered is a sample deletion audit worded as a check ("verify", "confirm", "tell me whether … removed"). gemini-3.5-flash-lite is the configured INTAKE_MODEL. It is the only one with zero discarded answers and a single disagreement, and the decision logic keeps that disagreement with the rules.
+
+### Live, replay and deterministic
+
+- **Live** (`--mode live --split all`): the validator passes, with 2 new calls (category fallback); intake and perception came from the cache.
+- **Replay** (`--mode replay --split all`): `output.csv` and the sample output are byte-identical to the live run, with 0 provider calls and 41 cache hits.
+- **Live vs deterministic:** 1 of 518 rows differs. case_45 stays COMPLETE and gains 5 `VERIFY_RECORD_PRESENT` steps for `audit_record_001`, `002`, `004`, `005` and `006`, which only the LLM category fallback can categorize. Samples score identically in all three modes.
+
+## Remaining sample losses after iteration 12
 
 14 gold steps are still missed and there are no extra steps:
 
@@ -54,9 +91,13 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 ## Metrics
 
 Produced by `python code/evaluation/main.py --write` after `python code/main.py --mode deterministic --split all`.
-Steps are matched as a multiset on (phase, system_id, resource_id, operation, state). Field accuracy compares
-step i of the prediction with step i of gold, over the longer of the two lists, so a missing step costs every field
-after it. Edit distance is Levenshtein over whole steps (all six fields), divided by the longer length.
+Steps are matched as a multiset on (phase, system_id, resource_id, operation, state) for precision and recall.
+Field accuracy is given two ways. **Positional** compares step i of the prediction with step i of gold over the
+longer list, so one missing step shifts and penalizes every field after it; it measures how close the serialized
+sequence is. **Step-aligned** first pairs steps by (phase, resource_id), preferring the same operation, and compares
+fields only over those pairs; it measures whether a step that was found is right in each field, independent of
+missing or extra steps (phase and resource_id are 1.000 by construction). Edit distance is Levenshtein over whole
+steps (all six fields), divided by the longer length.
 
 | Metric | Samples (32) | Custom overlays (7) |
 |---|---|---|
@@ -64,12 +105,19 @@ after it. Edit distance is Levenshtein over whole steps (all six fields), divide
 | Status accuracy | 32/32 (1.000) | 7/7 (1.000) |
 | Steps (gold / predicted / matched) | 193 / 179 / 179 | 31 / 31 / 31 |
 | Step precision / recall / F1 | 1.000 / 0.927 / 0.962 | 1.000 / 1.000 / 1.000 |
-| Field accuracy: phase | 0.927 | 1.000 |
-| Field accuracy: system_id | 0.803 | 1.000 |
-| Field accuracy: resource_id | 0.803 | 1.000 |
-| Field accuracy: operation | 0.824 | 1.000 |
-| Field accuracy: state | 0.824 | 1.000 |
-| Field accuracy: evidence_id | 0.922 | 1.000 |
+| Field accuracy, positional: phase | 0.927 | 1.000 |
+| Field accuracy, positional: system_id | 0.803 | 1.000 |
+| Field accuracy, positional: resource_id | 0.803 | 1.000 |
+| Field accuracy, positional: operation | 0.824 | 1.000 |
+| Field accuracy, positional: state | 0.824 | 1.000 |
+| Field accuracy, positional: evidence_id | 0.922 | 1.000 |
+| Step-aligned pairs | 179 | 31 |
+| Field accuracy, step-aligned: phase | 1.000 | 1.000 |
+| Field accuracy, step-aligned: system_id | 1.000 | 1.000 |
+| Field accuracy, step-aligned: resource_id | 1.000 | 1.000 |
+| Field accuracy, step-aligned: operation | 1.000 | 1.000 |
+| Field accuracy, step-aligned: state | 1.000 | 1.000 |
+| Field accuracy, step-aligned: evidence_id | 1.000 | 1.000 |
 | Sequence accuracy (exact ordered steps) | 20/32 (0.625) | 7/7 (1.000) |
 | Mean normalized edit distance | 0.088 | 0.000 |
 

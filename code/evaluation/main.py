@@ -13,7 +13,10 @@ Metrics, for each set:
   * case-level status accuracy;
   * step-level precision / recall / F1, multiset match on
     (phase, system_id, resource_id, operation, state);
-  * field-level accuracy per field, position-aligned (step i against step i);
+  * field-level accuracy per field, two ways: position-aligned (step i
+    against step i, over the longer list) and step-aligned (gold and predicted
+    steps paired by phase + resource_id, preferring the same operation; only
+    paired steps count);
   * sequence accuracy: exact ordered steps_json (all fields), and the mean
     normalized edit distance between predicted and gold step sequences
     (Levenshtein over whole steps / max length; 0 = identical);
@@ -61,6 +64,8 @@ class Metrics:
     n_gold: int = 0
     field_ok: dict[str, int] = field(default_factory=lambda: {f: 0 for f in FIELDS})
     positions: int = 0
+    aligned_ok: dict[str, int] = field(default_factory=lambda: {f: 0 for f in FIELDS})
+    aligned: int = 0
     exact: int = 0
     edit_sum: float = 0.0
     diffs: list[str] = field(default_factory=list)
@@ -81,6 +86,22 @@ class Metrics:
 
 def _step_tuple(s: dict) -> tuple[str, ...]:
     return tuple(str(s[f]) for f in FIELDS)
+
+
+def align(pred: list[dict], gold: list[dict]) -> list[tuple[dict, dict]]:
+    """Pair steps by (phase, resource_id); within a key, same operation first, then list order."""
+    pool: dict[tuple[str, str], list[dict]] = {}
+    for s in pred:
+        pool.setdefault((s["phase"], s["resource_id"]), []).append(s)
+    pairs: list[tuple[dict, dict]] = []
+    for g in gold:
+        bucket = pool.get((g["phase"], g["resource_id"]))
+        if not bucket:
+            continue
+        pick = next((s for s in bucket if s["operation"] == g["operation"]), bucket[0])
+        bucket.remove(pick)
+        pairs.append((pick, g))
+    return pairs
 
 
 def edit_distance(a: list[tuple], b: list[tuple]) -> int:
@@ -107,6 +128,10 @@ def evaluate(pairs: list[Pair]) -> Metrics:
         for i in range(min(len(p.pred_steps), len(p.gold_steps))):
             for f in FIELDS:
                 m.field_ok[f] += p.pred_steps[i][f] == p.gold_steps[i][f]
+        for ps, gs in align(p.pred_steps, p.gold_steps):
+            m.aligned += 1
+            for f in FIELDS:
+                m.aligned_ok[f] += ps[f] == gs[f]
         a, b = [_step_tuple(s) for s in p.pred_steps], [_step_tuple(s) for s in p.gold_steps]
         exact = p.gold_status == p.pred_status and a == b
         m.exact += exact
@@ -152,7 +177,12 @@ def metrics_table(rows: list[tuple[str, Metrics]]) -> str:
     line("Steps (gold / predicted / matched)", lambda m: f"{m.n_gold} / {m.n_pred} / {m.tp}")
     line("Step precision / recall / F1", lambda m: f"{m.precision:.3f} / {m.recall:.3f} / {m.f1:.3f}")
     for f in FIELDS:
-        line(f"Field accuracy: {f}", lambda m, f=f: f"{m.field_ok[f] / m.positions:.3f}" if m.positions else "n/a")
+        line(f"Field accuracy, positional: {f}",
+             lambda m, f=f: f"{m.field_ok[f] / m.positions:.3f}" if m.positions else "n/a")
+    line("Step-aligned pairs", lambda m: str(m.aligned))
+    for f in FIELDS:
+        line(f"Field accuracy, step-aligned: {f}",
+             lambda m, f=f: f"{m.aligned_ok[f] / m.aligned:.3f}" if m.aligned else "n/a")
     line("Sequence accuracy (exact ordered steps)", lambda m: f"{m.exact}/{m.n} ({m.exact / m.n:.3f})")
     line("Mean normalized edit distance", lambda m: f"{m.edit_sum / m.n:.3f}")
     return "\n".join(out)
@@ -163,9 +193,13 @@ def render(sample: Metrics, custom: Metrics, results: list[custom_cases.CustomRe
         "## Metrics",
         "",
         "Produced by `python code/evaluation/main.py --write` after `python code/main.py --mode deterministic --split all`.",
-        "Steps are matched as a multiset on (phase, system_id, resource_id, operation, state). Field accuracy compares",
-        "step i of the prediction with step i of gold, over the longer of the two lists, so a missing step costs every field",
-        "after it. Edit distance is Levenshtein over whole steps (all six fields), divided by the longer length.",
+        "Steps are matched as a multiset on (phase, system_id, resource_id, operation, state) for precision and recall.",
+        "Field accuracy is given two ways. **Positional** compares step i of the prediction with step i of gold over the",
+        "longer list, so one missing step shifts and penalizes every field after it; it measures how close the serialized",
+        "sequence is. **Step-aligned** first pairs steps by (phase, resource_id), preferring the same operation, and compares",
+        "fields only over those pairs; it measures whether a step that was found is right in each field, independent of",
+        "missing or extra steps (phase and resource_id are 1.000 by construction). Edit distance is Levenshtein over whole",
+        "steps (all six fields), divided by the longer length.",
         "",
         metrics_table([("Samples (32)", sample), (f"Custom overlays ({custom.n})", custom)]),
         "",

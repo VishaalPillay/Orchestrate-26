@@ -145,6 +145,7 @@ class OpenAICompatProvider:
         self._api_key = api_key
         self._limiter = RateLimiter(rpm)
         self._extra = _THINKING_OFF.get(name, {}) if disable_thinking else {}
+        self._low_thinking: set[str] = set()  # models that reject reasoning_effort="none"
         self._sdk: Any = None
 
     def model_for(self, request: LLMRequest) -> str:
@@ -171,8 +172,19 @@ class OpenAICompatProvider:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         kwargs.update(self._extra)
+        if model in self._low_thinking:
+            kwargs["reasoning_effort"] = "low"
         try:
-            resp = self._client().chat.completions.create(**kwargs)
+            try:
+                resp = self._client().chat.completions.create(**kwargs)
+            except openai.BadRequestError:
+                # Some models (gemini-3.5-flash-lite) reject reasoning_effort="none" but
+                # accept "low": retry once with the lowest effort they take, and remember it.
+                if kwargs.get("reasoning_effort") != "none":
+                    raise
+                self._low_thinking.add(model)
+                kwargs["reasoning_effort"] = "low"
+                resp = self._client().chat.completions.create(**kwargs)
         except openai.APIStatusError as exc:
             retry_after = _retry_after(exc.response.headers if exc.response is not None else {})
             retryable = exc.status_code == 429 or exc.status_code >= 500

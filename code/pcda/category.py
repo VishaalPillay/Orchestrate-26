@@ -14,6 +14,9 @@ from every fact about the resource, whatever its capture time.
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import threading
 from dataclasses import dataclass
 from typing import Final, Iterable
@@ -146,6 +149,33 @@ STATIC_MAP: Final[dict[tuple[str, str], str]] = {
     **{key: cat for key, (cat, _) in INFERRED_FROM_EVIDENCE.items()},
 }
 
+# Experiment switch (evaluation only): PCDA_DISABLE_INFERRED=1 hides the
+# INFERRED_FROM_EVIDENCE entries, to test whether the LLM fallback recovers them.
+_DISABLE_INFERRED_ENV: Final = "PCDA_DISABLE_INFERRED"
+
+CATEGORY_TASK: Final = "category.fallback"
+CATEGORY_MODEL_ENV: Final = "CATEGORY_MODEL"
+UNKNOWN: Final = "UNKNOWN"
+ALLOWED: Final[tuple[str, ...]] = CATEGORIES + (DATA_FLOW,)
+_MASKS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
+    (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "<email>"),
+    (re.compile(r"\b[0-9a-f]{64}\b"), "<hash>"),
+    (re.compile(r"\buser_\d+\b"), "<user_id>"),
+    (re.compile(r"\+?\d[\d\s().-]{6,}\d"), "<phone>"),
+)
+
+
+def mask(value: str) -> str:
+    for rx, token in _MASKS:
+        value = rx.sub(token, value)
+    return value
+
+
+def _static_lookup(name: str, signal: str) -> str | None:
+    if os.environ.get(_DISABLE_INFERRED_ENV) == "1" and (name, signal) in INFERRED_FROM_EVIDENCE:
+        return None
+    return STATIC_MAP.get((name, signal))
+
 # Attribute keys that act as signals when present on a fact.
 SIGNAL_KEYS: Final[frozenset[str]] = frozenset({"email_opt_in"})
 
@@ -159,27 +189,30 @@ class CategoryResolution:
 
 
 class CategoryResolver:
-    def __init__(self, client: LLMClient | None) -> None:
+    def __init__(self, client: LLMClient | None, rule_text: dict[str, str] | None = None) -> None:
         self._client = client
+        self._rule_text = rule_text or {}
         self._cache: dict[tuple[str, str], str | None] = {}
         self._lock = threading.Lock()
+        self.llm_answers: dict[tuple[str, str], tuple[str, str]] = {}  # key -> (answer, rationale)
 
     def resolve(self, name: str, signals: frozenset[str] = frozenset()) -> str | None:
-        """Category for a source name, or None if unknown and no fallback is allowed."""
+        """Static category for a source name, or None. Never calls a model."""
         for signal in sorted(signals):
-            hit = STATIC_MAP.get((name, signal))
+            hit = _static_lookup(name, signal)
             if hit is not None:
                 return hit
-        hit = STATIC_MAP.get((name, ""))
-        if hit is not None:
-            return hit
+        return _static_lookup(name, "")
+
+    def resolve_llm(self, name: str, signals: frozenset[str], examples: list[dict[str, str]]) -> str | None:
+        """LLM fallback for a name the static map does not cover; cached per (name, signals)."""
         if self._client is None or self._client.mode is RunMode.DETERMINISTIC:
             return None
         key = (name, ",".join(sorted(signals)))
         with self._lock:
             if key in self._cache:
                 return self._cache[key]
-        answer = self._llm_fallback(name, signals)
+        answer = self._llm_fallback(name, signals, examples)
         with self._lock:
             self._cache[key] = answer
         return answer
@@ -194,11 +227,12 @@ class CategoryResolver:
         pooled per name across the resource's facts.
         """
         pooled: dict[tuple[int, str], frozenset[str]] = {}
+        facts_list = list(facts)
 
         def add(rank: int, name: str, signals: frozenset[str]) -> None:
             pooled[(rank, name)] = pooled.get((rank, name), frozenset()) | signals
 
-        for f in facts:
+        for f in facts_list:
             if f.is_coverage:
                 continue
             signals = frozenset(k for k in f.attrs if k in SIGNAL_KEYS)
@@ -222,7 +256,10 @@ class CategoryResolver:
         source = ""
         unknown: list[tuple[int, str]] = []
         seen: set[str] = set()
-        for rank, name in sorted(pooled):
+        ordered = sorted(pooled)
+        fact_names = [(r, n) for r, n in ordered if r < 3]
+        activity_names = [(r, n) for r, n in ordered if r == 3]
+        for rank, name in fact_names:
             cat = self.resolve(name, pooled[(rank, name)])
             if cat is None:
                 unknown.append((rank, name))
@@ -230,11 +267,73 @@ class CategoryResolver:
             seen.add(cat)
             if decided is None:
                 decided, decided_rank, source = cat, rank, f"rank{rank}:{name}"
+        if decided is None and unknown:
+            # Static map silent for every fact name: ask the LLM (model modes only),
+            # in precedence order, before falling back to activity target systems.
+            by_name = _examples_by_name(facts_list)
+            for rank, name in unknown:
+                cat = self.resolve_llm(name, pooled[(rank, name)], by_name.get(name, []))
+                if cat is not None:
+                    seen.add(cat)
+                    decided, decided_rank, source = cat, rank, f"llm:rank{rank}:{name}"
+                    break
+        for rank, name in activity_names:
+            cat = self.resolve(name, pooled[(rank, name)])
+            if cat is None:
+                unknown.append((rank, name))
+                continue
+            if decided is None:
+                seen.add(cat)
+                decided, decided_rank, source = cat, rank, f"rank{rank}:{name}"
         conflicts = tuple(sorted(seen - {decided})) if decided else ()
         # Containers below the deciding rank (replica tables, "ledger", "handover")
         # are expected to be unknown; only names that could have decided are reported.
         reported = tuple(name for rank, name in unknown if rank <= decided_rank)
         return CategoryResolution(decided, source, reported, conflicts)
 
-    def _llm_fallback(self, name: str, signals: frozenset[str]) -> str | None:
-        raise NotImplementedError("category.CategoryResolver._llm_fallback")
+    def _llm_fallback(self, name: str, signals: frozenset[str], examples: list[dict[str, str]]) -> str | None:
+        from pcda.agents import prompts
+        from pcda.llm.client import LLMRequest, LLMUnavailable
+
+        system, user = prompts.load(CATEGORY_TASK)
+        options = "\n".join(
+            f"- {c}: {self._rule_text.get(c, 'not a policy category: a sync or integration flow, must be disabled')}"
+            for c in ALLOWED
+        )
+        payload = {
+            "name": name,
+            "attribute_keys": sorted({k for ex in examples for k in ex}),
+            "signals": sorted(signals),
+            "example_records": examples[:3],
+        }
+        prompt = user.replace("{{CATEGORIES}}", options).replace(
+            "{{SOURCE}}", json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=1)
+        )
+        request = LLMRequest(task=CATEGORY_TASK, prompt=prompt, system=system, model_env=CATEGORY_MODEL_ENV,
+                             schema={"type": "object", "required": ["category", "rationale"]})
+        try:
+            resp = self._client.complete(request)  # type: ignore[union-attr]
+        except LLMUnavailable:
+            return None
+        answer = str(resp.parsed.get("category", "")).strip().upper() if isinstance(resp.parsed, dict) else ""
+        rationale = str(resp.parsed.get("rationale", ""))[:300] if isinstance(resp.parsed, dict) else ""
+        self.llm_answers[(name, ",".join(sorted(signals)))] = (answer, rationale)
+        return answer if answer in ALLOWED else None  # UNKNOWN or off-list -> no category
+
+
+_EXAMPLE_SKIP: Final = frozenset({"src", "source_line", "id_fields", "pii_fields", "trace_id", "coverage", "is_vacuous"})
+
+
+def _examples_by_name(facts: list[Fact]) -> dict[str, list[dict[str, str]]]:
+    """Up to 3 masked example records per source name, in fact order (deterministic)."""
+    out: dict[str, list[dict[str, str]]] = {}
+    for f in sorted(facts, key=lambda f: f.fact_id):
+        if f.is_coverage:
+            continue
+        record = {k: mask(v) for k, v in sorted(f.attrs.items()) if k not in _EXAMPLE_SKIP}
+        record["kind"] = f.kind.value
+        for key in ("record_type", "collection", ATTR_TABLE):
+            name = f.attrs.get(key)
+            if name and len(out.setdefault(name, [])) < 3 and record not in out[name]:
+                out[name].append(record)
+    return out
