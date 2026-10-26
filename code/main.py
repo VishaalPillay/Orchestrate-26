@@ -22,7 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from pcda import paths
-from pcda.cases import SPLITS, CaseRequest, load_evidence_times, load_requests
+from pcda.cases import SPLIT_NAMES, CaseRequest, load_evidence_times, load_requests, split_sources
 from pcda.contract import OUTPUT_COLUMNS
 from pcda.llm.client import RunMode
 from pcda.pipeline import CaseResult, Context, build_context, run_case
@@ -33,7 +33,13 @@ from pcda.validator import ContractViolation, validate_output
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="pcda", description="Ghost Data Still Exists deletion audit")
     p.add_argument("--mode", choices=[m.value for m in RunMode], default=RunMode.DETERMINISTIC.value)
-    p.add_argument("--split", choices=sorted(SPLITS), default="sample")
+    p.add_argument("--split", choices=SPLIT_NAMES, default="sample")
+    p.add_argument("--dataset-dir", type=Path, default=None,
+                   help="read every dataset file from this directory (custom evaluation overlays)")
+    p.add_argument("--case", action="append", default=[],
+                   help="run only these case_ids (repeatable)")
+    p.add_argument("--out", type=Path, default=None,
+                   help="write rows here; required with --dataset-dir or --case, which never touch output.csv")
     p.add_argument("--workers", type=int, default=1)
     return p.parse_args(argv)
 
@@ -112,12 +118,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     load_dotenv(paths.ENV_FILE)
     mode = RunMode(args.mode)
+    overlay = args.dataset_dir is not None or bool(args.case)
+    if overlay and args.out is None:
+        print("--dataset-dir and --case need --out (they never write output.csv)", file=sys.stderr)
+        return 2
+    if args.dataset_dir is not None:
+        paths.use_dataset(args.dataset_dir)
     try:
         ctx = build_context(mode)
         evidence_times = load_evidence_times()
         print_canonical_systems(ctx)
-        for source in SPLITS[args.split]:
+        selected: list[CaseRequest] = []
+        for source in split_sources(args.split):
             cases = load_requests(source)
+            if args.case:
+                cases = [c for c in cases if c.case_id in set(args.case)]
+                selected.extend(cases)
+                continue
             split_name = "test" if source == paths.DELETION_REQUESTS else "sample"
             results = run_split(cases, ctx, args.workers)
             print_split_summary(split_name, cases, results)
@@ -134,7 +151,26 @@ def main(argv: list[str] | None = None) -> int:
             target = paths.OUTPUT_CSV if source == paths.DELETION_REQUESTS else paths.RUNS_DIR / "sample_output.csv"
             write_rows(target, rows)
             print(f"wrote {len(rows)} rows -> {target}")
-        ctx.ledger.write(paths.RUNS_DIR / f"usage_{args.split}_{mode.value}.json")
+        if args.case:
+            missing = sorted(set(args.case) - {c.case_id for c in selected})
+            if missing:
+                print(f"unknown case_id(s): {missing}", file=sys.stderr)
+                return 2
+            results = run_split(selected, ctx, args.workers)
+            rows = to_rows(results)
+            validate_output(
+                OUTPUT_COLUMNS,
+                rows,
+                expected_case_ids=[c.case_id for c in selected],
+                audit_at={c.case_id: c.audit_at for c in selected},
+                evidence_times=evidence_times,
+                lineage=ctx.lineage,
+            )
+            write_rows(args.out, rows)
+            write_flags(args.out.with_suffix(".flags.json"), results)
+            print(f"wrote {len(rows)} rows -> {args.out}")
+        if not overlay:
+            ctx.ledger.write(paths.RUNS_DIR / f"usage_{args.split}_{mode.value}.json")
     except NotImplementedError as exc:
         print(f"skeleton: stage not implemented: {exc}. No output written.", file=sys.stderr)
         return 2

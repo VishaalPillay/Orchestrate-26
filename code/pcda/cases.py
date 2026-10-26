@@ -22,11 +22,16 @@ class CaseRequest:
     request_text: str
 
 
-SPLITS: dict[str, tuple[Path, ...]] = {
-    "sample": (paths.SAMPLE_REQUESTS,),
-    "test": (paths.DELETION_REQUESTS,),
-    "all": (paths.SAMPLE_REQUESTS, paths.DELETION_REQUESTS),
-}
+SPLIT_NAMES: tuple[str, ...] = ("all", "sample", "test")
+
+
+def split_sources(split: str) -> tuple[Path, ...]:
+    """Request files for a split, resolved at call time (paths.use_dataset may move them)."""
+    return {
+        "sample": (paths.SAMPLE_REQUESTS,),
+        "test": (paths.DELETION_REQUESTS,),
+        "all": (paths.SAMPLE_REQUESTS, paths.DELETION_REQUESTS),
+    }[split]
 
 
 def load_requests(path: Path) -> list[CaseRequest]:

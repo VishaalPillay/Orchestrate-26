@@ -18,6 +18,30 @@ SYSTEM_ACTIVITY: Path = DATASET / "system_activity.csv"
 DELETION_RULES: Path = DATASET / "deletion_rules.csv"
 EVIDENCE_MANIFEST: Path = DATASET / "evidence_files.csv"
 
+_DATASET_FILES = {
+    "DELETION_REQUESTS": "deletion_requests.csv",
+    "SAMPLE_REQUESTS": "sample_deletion_requests.csv",
+    "SAMPLE_OUTPUT": "sample_output.csv",
+    "USER_IDENTITIES": "user_identities.csv",
+    "USER_AUDIT_LOG": "user_audit_log.csv",
+    "SYSTEM_ACTIVITY": "system_activity.csv",
+    "DELETION_RULES": "deletion_rules.csv",
+    "EVIDENCE_MANIFEST": "evidence_files.csv",
+}
+
+
+def use_dataset(root: Path) -> None:
+    """Point every dataset path at another directory (custom evaluation overlays).
+
+    Callers read paths as `paths.X` at call time, so rebinding the module
+    globals is enough. Output, cache and .env paths are not touched.
+    """
+    global DATASET, EVIDENCE_DIR
+    DATASET = Path(root).resolve()
+    EVIDENCE_DIR = DATASET / "evidence"
+    for name, file in _DATASET_FILES.items():
+        globals()[name] = DATASET / file
+
 OUTPUT_CSV: Path = REPO_ROOT / "output.csv"
 ENV_FILE: Path = REPO_ROOT / ".env"
 

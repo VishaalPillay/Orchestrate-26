@@ -46,8 +46,8 @@ class Adapter(Protocol):
         ...
 
 
-def read_manifest(path: Path = paths.EVIDENCE_MANIFEST) -> list[ManifestRow]:
-    with path.open(encoding="utf-8", newline="") as fh:
+def read_manifest(path: Path | None = None) -> list[ManifestRow]:
+    with (path or paths.EVIDENCE_MANIFEST).open(encoding="utf-8", newline="") as fh:
         rows = [
             ManifestRow(r["file_id"], r["file_path"], r["origin"], parse_ts(r["captured_at"]))
             for r in csv.DictReader(fh)

@@ -50,3 +50,85 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 - 5 accounts still contested in their time window (cases 18, 23, 28, 29, 32);
 - 2 security audit records that appear in no participant data (`audit_record_6645`, `audit_record_5569`);
 - `account_004` (case_04), which appears in no participant data either.
+
+## Metrics
+
+Produced by `python code/evaluation/main.py --write` after `python code/main.py --mode deterministic --split all`.
+Steps are matched as a multiset on (phase, system_id, resource_id, operation, state). Field accuracy compares
+step i of the prediction with step i of gold, over the longer of the two lists, so a missing step costs every field
+after it. Edit distance is Levenshtein over whole steps (all six fields), divided by the longer length.
+
+| Metric | Samples (32) | Custom overlays (7) |
+|---|---|---|
+| Cases | 32 | 7 |
+| Status accuracy | 32/32 (1.000) | 7/7 (1.000) |
+| Steps (gold / predicted / matched) | 193 / 179 / 179 | 31 / 31 / 31 |
+| Step precision / recall / F1 | 1.000 / 0.927 / 0.962 | 1.000 / 1.000 / 1.000 |
+| Field accuracy: phase | 0.927 | 1.000 |
+| Field accuracy: system_id | 0.803 | 1.000 |
+| Field accuracy: resource_id | 0.803 | 1.000 |
+| Field accuracy: operation | 0.824 | 1.000 |
+| Field accuracy: state | 0.824 | 1.000 |
+| Field accuracy: evidence_id | 0.922 | 1.000 |
+| Sequence accuracy (exact ordered steps) | 20/32 (0.625) | 7/7 (1.000) |
+| Mean normalized edit distance | 0.088 | 0.000 |
+
+### Per-case diff: samples
+
+```text
+case_03: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
+    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_9406 ANONYMIZED ev=evidence_94
+case_04: gold COMPLETE / pred COMPLETE, matched 1/2, extra 0
+    - VERI VERIFY_RECORD_ABSENT       account_service/account_004 ABSENT ev=evidence_54
+case_18: gold INCOMPLETE / pred INCOMPLETE, matched 12/14, extra 0
+    - VERI VERIFY_RECORD_ABSENT       account_service/account_5521 ABSENT ev=-
+    - VERI VERIFY_RECORD_PRESENT      security_service/audit_record_6645 PRESENT ev=-
+case_20: gold INCOMPLETE / pred INCOMPLETE, matched 7/8, extra 0
+    - VERI VERIFY_RECORD_PRESENT      security_service/audit_record_5569 PRESENT ev=-
+case_21: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
+    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_5335 ANONYMIZED ev=evidence_92
+case_23: gold INCOMPLETE / pred INCOMPLETE, matched 7/8, extra 0
+    - VERI VERIFY_RECORD_ABSENT       account_service/account_410 ABSENT ev=-
+case_25: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
+    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_1895 ANONYMIZED ev=evidence_92
+case_26: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
+    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_4566 ANONYMIZED ev=evidence_92
+case_27: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
+    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_4574 ANONYMIZED ev=evidence_92
+case_28: gold COMPLETE / pred COMPLETE, matched 4/6, extra 0
+    - VERI VERIFY_RECORD_ABSENT       account_service/account_5482 ABSENT ev=evidence_92
+    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_6077 ANONYMIZED ev=evidence_92
+case_29: gold INCOMPLETE / pred INCOMPLETE, matched 13/14, extra 0
+    - VERI VERIFY_RECORD_ABSENT       account_service/account_7012 ABSENT ev=-
+case_32: gold INCOMPLETE / pred INCOMPLETE, matched 4/5, extra 0
+    - VERI VERIFY_RECORD_ABSENT       account_service/account_8858 ABSENT ev=-
+```
+
+### Per-case diff: custom overlays
+
+```text
+all custom cases exact
+```
+
+## Custom evaluation cases
+
+Each case copies `dataset/` to a temporary directory, applies one targeted mutation, and runs the real pipeline on
+one case (`main.py --dataset-dir <overlay> --case <id> --out <file>`). The expected verdict and steps are literal
+in `code/evaluation/custom_cases.py`. Base cases are public samples the pipeline already matches exactly, so an
+unchanged expectation equals that sample's published answer. Run them with `python code/evaluation/custom_cases.py`.
+
+| # | Base | Mutation | Tests | Why | Expected | Result |
+|---|---|---|---|---|---|---|
+| 1 non-deletion request | case_05 | request_text -> 'Please remove me from marketing lists only; keep my account.' | Intake recognizes a marketing opt-out that explicitly keeps the account. | A request that does not authorize deletion must be NOT_APPLICABLE with no steps, even though the case's evidence still shows a remaining account (case_05 is INCOMPLETE as a deletion). | NOT_APPLICABLE, 0 steps | pass (NOT_APPLICABLE) |
+| 2 post-audit deletion | case_24 | new ledger evidence_9001 captured and recorded 2026-09-16 (audit_at + 1 day): search_5577 NOT_FOUND | Evidence observed after audit_at cannot change the answer. | The spec fixes the answer at audit_at; a later 'deleted' observation must neither discharge the remaining search entry nor be cited. | INCOMPLETE, 7 steps | pass (INCOMPLETE) |
+| 3 replica drift | case_16 | evidence_05: delete the customer_data_primary INSERT for search_1007, keep the replica row | A row deleted from the primary but still in the read replica is a remaining record. | Deletion workflows often clean the primary only; the dataset models replica drift explicitly. | INCOMPLETE, 7 steps | pass (INCOMPLETE) |
+| 4 decoy identity | case_06 | new ledger evidence_9002 (2026-09-05, inside the request window): search_9999 FOUND for jonas.bergg@outlook.com | A near-identical email (one extra character) on another resource is not the subject's. | Identity matching must be exact; fuzzy matching would delete someone else's data. | INCOMPLETE, 4 steps; never search_9999 | pass (INCOMPLETE) |
+| 5a historical email in the request, uppercased | case_10 | request email -> NADIA.PETRESCU@YAHOO.COM (user_10's second email, audit_121/audit_238) | A request filed under an intermediate historical email, in upper case, resolves to the same subject. | Requests may come from any past address; normalization and the audit-log closure must both hold. | INCOMPLETE, 4 steps | pass (INCOMPLETE) |
+| 5b historical email in evidence, uppercased | case_10 | evidence_61: lookup_key=nadia.ionescu@yahoo.com -> NADIA.IONESCU@YAHOO.COM | Evidence that names the subject only by an old email, in upper case, still attributes the resource. | Legacy systems keep old identifiers in arbitrary case; support_002's only link is that old email. | INCOMPLETE, 4 steps | pass (INCOMPLETE) |
+| 6 tombstone with PII | case_31 | evidence_51: tombstone_440 name -> 'Ada Eze', email -> a.eze08@gmail.com | A tombstone that regains direct identifiers is exposed PII to redact, not a record to delete. | ACCOUNT_TOMBSTONE is REDACT: keep the stable user reference, remove name/email/phone/hash. | INCOMPLETE, 5 steps | pass (INCOMPLETE) |
+
+Every mutation was confirmed to reach the fact store, so no pass is vacuous:
+- case 2's post-audit ABSENCE is ingested and then excluded by `as_of(audit_at)`;
+- case 3 leaves only the replica row of `search_1007`;
+- case 4's `search_9999` exists with an email that resolves to no user;
+- case 5b's uppercased key normalizes to `user_10`.

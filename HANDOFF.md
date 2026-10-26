@@ -21,7 +21,11 @@ Reproduce (deterministic, no provider calls; screenshot transcriptions come from
 .venv/Scripts/python.exe code/main.py --mode deterministic --split all
 .venv/Scripts/python.exe code/evaluation/score.py --diff
 .venv/Scripts/python.exe -m pytest code/tests -q
+.venv/Scripts/python.exe code/evaluation/custom_cases.py      # 7 overlays, all pass
+.venv/Scripts/python.exe code/evaluation/main.py --write      # rewrites the Metrics and Custom sections
 ```
+
+`main.py --dataset-dir DIR --case ID --out FILE` runs single cases on a copied dataset and never writes `output.csv`.
 
 ## What is committed (main)
 
@@ -65,7 +69,7 @@ Rejected experiments, don't retry without new evidence: deletion-run reconstruct
 2. **Category for screenshot-only records** (open issue 2), measured on samples and on the affected evaluation cases.
 3. **LLM category fallback test:** remove `INFERRED_FROM_EVIDENCE`, run the fallback (`CATEGORY_MODEL`), and check it recovers MARKETING_PROFILE and SECONDARY_IDENTIFIER. Keep the static entries unless the fallback is perfect.
 4. **Skeptic** (`SKEPTIC_MODEL`) on `activity_temporal` and `activity_joint` picks, starting with case_45 and case_493. It stays advisory only.
-5. **At least three custom evaluation cases** in `evaluation_report.md`, which the spec requires (e.g. the case_33 replica-vs-snapshot ordering, the case_55 burden of proof, an intake negation).
+5. ~~Custom evaluation cases~~ **done**: 7 dataset overlays in `code/evaluation/custom_cases.py` (all pass), and metrics via `code/evaluation/main.py --write`. Candidates to add: the case_33 replica-vs-snapshot ordering and a burden-of-proof overlay.
 6. **`evaluation/usage_report.md`** from the final full run's ledger (`code/.cache/runs/run_log.jsonl` and `usage_*.json`): providers, models, calls, tokens, cost per request.
 7. **README.md** setup and run instructions, and **packaging** of `code.zip`: code, prompts, config, README and `evaluation/`, plus `code/.cache/llm/`; never `dataset/`, `.venv`, `.env` or nested archives. Submit `output.csv`, `code.zip` and `log.txt` at https://wwww.hackerrank.com/contests/hackerrank-orchestrate-october26/challenges/ghost-data-still-exists
 8. Leave 2 hours before the deadline for a clean-clone run that reproduces `output.csv` byte for byte from the shipped cache.
