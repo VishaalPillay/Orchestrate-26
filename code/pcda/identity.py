@@ -72,6 +72,7 @@ class LinkTier(IntEnum):
     LOG_TRACE = 4
     ACTIVITY_TEMPORAL = 5
     ACTIVITY_JOINT = 6
+    SKEPTIC = 7  # proposed by the skeptic agent, accepted by the code-side gate
 
 
 # Fact origin kind (ATTR_SRC, stamped by the adapters) -> tier.

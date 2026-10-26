@@ -100,6 +100,9 @@ class FactStore:
     def __iter__(self) -> Iterator[Fact]:
         return iter(self._facts.values())
 
+    def get(self, fact_id: str) -> Fact | None:
+        return self._facts.get(fact_id)
+
     def by_identifier(self, identifier: str) -> list[Fact]:
         return self._sorted(self._by_identifier.get(identifier, ()))
 

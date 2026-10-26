@@ -78,6 +78,16 @@ class LLMResponse:
     cached: bool = False
 
 
+@dataclass(frozen=True)
+class TurnResponse:
+    message: dict[str, Any]  # assistant message: role, content, optional tool_calls
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached: bool = False
+
+
 class LLMUnavailable(RuntimeError):
     """Deterministic mode with no cached answer, or every provider failed."""
 
@@ -107,6 +117,10 @@ class Provider(Protocol):
     def model_for(self, request: LLMRequest) -> str: ...
 
     def chat(self, model: str, messages: list[dict[str, Any]], json_mode: bool) -> tuple[str, int, int]: ...
+
+    def chat_tools(
+        self, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any], int, int]: ...
 
 
 class RateLimiter:
@@ -164,36 +178,87 @@ class OpenAICompatProvider:
     def _redact(self, text: str) -> str:
         return text.replace(self._api_key, "[REDACTED]") if self._api_key else text
 
-    def chat(self, model: str, messages: list[dict[str, Any]], json_mode: bool) -> tuple[str, int, int]:
+    def _create(self, kwargs: dict[str, Any]) -> Any:
         import openai
 
         self._limiter.acquire()
-        kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": 0}
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
         kwargs.update(self._extra)
-        if model in self._low_thinking:
+        if kwargs["model"] in self._low_thinking:
             kwargs["reasoning_effort"] = "low"
         try:
             try:
-                resp = self._client().chat.completions.create(**kwargs)
+                return self._client().chat.completions.create(**kwargs)
             except openai.BadRequestError:
                 # Some models (gemini-3.5-flash-lite) reject reasoning_effort="none" but
                 # accept "low": retry once with the lowest effort they take, and remember it.
                 if kwargs.get("reasoning_effort") != "none":
                     raise
-                self._low_thinking.add(model)
+                self._low_thinking.add(kwargs["model"])
                 kwargs["reasoning_effort"] = "low"
-                resp = self._client().chat.completions.create(**kwargs)
+                return self._client().chat.completions.create(**kwargs)
         except openai.APIStatusError as exc:
             retry_after = _retry_after(exc.response.headers if exc.response is not None else {})
             retryable = exc.status_code == 429 or exc.status_code >= 500
             raise ProviderError(self.name, self._redact(f"HTTP {exc.status_code}: {exc.message}"), retryable, retry_after)
         except (openai.APIConnectionError, openai.APITimeoutError) as exc:
             raise ProviderError(self.name, self._redact(f"{type(exc).__name__}: {exc}"), True, None)
+
+    def chat(self, model: str, messages: list[dict[str, Any]], json_mode: bool) -> tuple[str, int, int]:
+        kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": 0}
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = self._create(kwargs)
         text = resp.choices[0].message.content or ""
         usage = resp.usage
         return text, (usage.prompt_tokens if usage else 0), (usage.completion_tokens if usage else 0)
+
+    def chat_tools(
+        self, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any], int, int]:
+        """One tool-calling turn. Returns the assistant message reduced to the fields
+        that may be echoed back (role, content, tool_calls); Gemini's per-call
+        extra_content (thought signatures) is kept for Gemini only."""
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [_for_provider(m, self.name) for m in messages],
+            "temperature": 0,
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        resp = self._create(kwargs)
+        usage = resp.usage
+        return (
+            _clean_assistant(resp.choices[0].message.model_dump(exclude_none=True), self.name),
+            (usage.prompt_tokens if usage else 0),
+            (usage.completion_tokens if usage else 0),
+        )
+
+
+def _clean_assistant(raw: dict[str, Any], provider: str) -> dict[str, Any]:
+    """Only role, content and tool_calls survive, so a message from one provider can be sent to another."""
+    out: dict[str, Any] = {"role": "assistant", "content": raw.get("content") or ""}
+    calls = []
+    for c in raw.get("tool_calls") or []:
+        call: dict[str, Any] = {
+            "id": c.get("id", ""),
+            "type": "function",
+            "function": {"name": c["function"]["name"], "arguments": c["function"].get("arguments") or "{}"},
+        }
+        if provider == "gemini" and c.get("extra_content"):
+            call["extra_content"] = c["extra_content"]
+        calls.append(call)
+    if calls:
+        out["tool_calls"] = calls
+    return out
+
+
+def _for_provider(message: dict[str, Any], provider: str) -> dict[str, Any]:
+    """Drop another provider's private fields (extra_content) before sending a history."""
+    if provider == "gemini" or not message.get("tool_calls"):
+        return message
+    calls = [{k: v for k, v in c.items() if k != "extra_content"} for c in message["tool_calls"]]
+    return {**message, "tool_calls": calls}
 
 
 def _retry_after(headers: Any) -> float | None:
@@ -285,6 +350,57 @@ class LLMClient:
             )
             return resp
         raise LLMUnavailable(f"{request.task}: all providers failed: {'; '.join(errors) or 'none configured'}")
+
+    def complete_turn(
+        self, task: str, model_env: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> TurnResponse:
+        """One tool-calling turn of an agent loop, cached per turn.
+
+        The key is the requested model, the whole message history and the tool
+        schemas. Tool results are deterministic, so a replay walks the same
+        path and every turn hits the cache; a miss in replay is an error.
+        """
+        model = LLMRequest(task, "", model_env).model
+        key = content_key(model, json.dumps(messages, sort_keys=True, ensure_ascii=False), {"tools": tools}, [])
+        hit = self.cache.get(key)
+        if hit is not None:
+            self.ledger.record_cache_hit(task, hit["provider"], hit["model"])
+            return TurnResponse(hit["message"], hit["provider"], hit["model"], cached=True)
+        if self.mode is RunMode.DETERMINISTIC:
+            raise LLMUnavailable(f"{task}: no cached answer in deterministic mode")
+        if self.mode is RunMode.REPLAY:
+            raise CacheMiss(f"{task}: cache miss for {key}")
+        errors: list[str] = []
+        for provider in self.providers:
+            pmodel = provider.model_for(LLMRequest(task, "", model_env))
+            try:
+                message, tin, tout = self._chat_tools_retrying(provider, pmodel, messages, tools, task)
+            except ProviderError as exc:
+                errors.append(f"{provider.name}: {exc}")
+                continue
+            self.cache.put(
+                key,
+                {"task": task, "requested_model": model, "message": message, "provider": provider.name,
+                 "model": pmodel, "input_tokens": tin, "output_tokens": tout},
+            )
+            return TurnResponse(message, provider.name, pmodel, tin, tout)
+        raise LLMUnavailable(f"{task}: all providers failed: {'; '.join(errors) or 'none configured'}")
+
+    def _chat_tools_retrying(
+        self, provider: Provider, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]], task: str
+    ) -> tuple[dict[str, Any], int, int]:
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                message, tin, tout = provider.chat_tools(model, messages, tools)
+            except ProviderError as exc:
+                self.ledger.record_error(task, provider.name, model, attempt, exc.message)
+                if not exc.retryable or attempt == self.max_attempts:
+                    raise
+                time.sleep(exc.retry_after if exc.retry_after is not None else self.base_backoff * 2 ** (attempt - 1))
+                continue
+            self.ledger.record(task, provider.name, model, tin, tout)
+            return message, tin, tout
+        raise AssertionError("unreachable")
 
     def _ask(self, provider: Provider, request: LLMRequest) -> LLMResponse:
         """One answer from one provider: retries, then strict JSON with one repair turn."""

@@ -22,12 +22,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from pcda import paths
+from pcda.agents.skeptic_run import SkepticRun, blast_radius, run_skeptic, write_audit
 from pcda.cases import SPLIT_NAMES, CaseRequest, load_evidence_times, load_requests, split_sources
 from pcda.contract import OUTPUT_COLUMNS
 from pcda.llm.client import RunMode
 from pcda.pipeline import CaseResult, Context, build_context, run_case
 from pcda.planner import serialize_steps
 from pcda.validator import ContractViolation, validate_output
+
+
+BLAST_MAX_VERDICTS = 10
+BLAST_MAX_STEPS = 25
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -41,12 +46,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--out", type=Path, default=None,
                    help="write rows here; required with --dataset-dir or --case, which never touch output.csv")
     p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--skeptic", choices=["on", "off"], default="on",
+                   help="the skeptic agent (live and replay only; deterministic mode never runs it)")
+    p.add_argument("--skeptic-budget", action="append", default=[], metavar="SPLIT=N",
+                   help="model-call budget per split (defaults: sample=60, test=120)")
+    p.add_argument("--accept-skeptic-blast-radius", action="store_true",
+                   help="write output.csv even when the skeptic changed more than %d verdicts or %d steps" % (
+                       BLAST_MAX_VERDICTS, BLAST_MAX_STEPS))
     return p.parse_args(argv)
 
 
-def run_split(cases: list[CaseRequest], ctx: Context, workers: int) -> list[CaseResult]:
+def run_split(cases: list[CaseRequest], ctx: Context, workers: int, adjust: bool = True) -> list[CaseResult]:
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        return list(pool.map(lambda c: run_case(c, ctx), cases))
+        return list(pool.map(lambda c: run_case(c, ctx, adjust), cases))
+
+
+def print_skeptic_summary(runs: dict[str, SkepticRun]) -> None:
+    for name, run in runs.items():
+        print(
+            f"[skeptic {name}] queue {run.queue_len}, investigated {len(run.investigations)}, "
+            f"never reached {run.unreached}, calls {run.budget_used}/{run.budget}"
+        )
+        print(f"[skeptic {name}] {json.dumps(run.counts(), sort_keys=True)}")
 
 
 def to_rows(results: list[CaseResult]) -> list[dict[str, str]]:
@@ -127,6 +148,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ctx = build_context(mode)
         evidence_times = load_evidence_times()
+        skeptic_runs: dict[str, SkepticRun] = {}
+        if mode is not RunMode.DETERMINISTIC and args.skeptic == "on" and not overlay:
+            to_run = {}
+            for source in split_sources(args.split):
+                to_run["test" if source == paths.DELETION_REQUESTS else "sample"] = load_requests(source)
+            budgets = {k: int(v) for k, v in (b.split("=", 1) for b in args.skeptic_budget)}
+            skeptic_runs = run_skeptic(ctx, to_run, budgets)
+            print_skeptic_summary(skeptic_runs)
         print_canonical_systems(ctx)
         selected: list[CaseRequest] = []
         for source in split_sources(args.split):
@@ -138,6 +167,17 @@ def main(argv: list[str] | None = None) -> int:
             split_name = "test" if source == paths.DELETION_REQUESTS else "sample"
             results = run_split(cases, ctx, args.workers)
             print_split_summary(split_name, cases, results)
+            blast = None
+            if split_name in skeptic_runs:
+                before = run_split(cases, ctx, args.workers, adjust=False)
+                blast = blast_radius(before, results)
+                audit_path = paths.RUNS_DIR / f"skeptic_audit_{split_name}.md"
+                write_audit(audit_path, skeptic_runs[split_name], before, results, blast)
+                print(
+                    f"[skeptic {split_name}] blast radius: {len(blast.verdict_changes)} verdict change(s) "
+                    f"{list(blast.verdict_changes)}, {blast.step_changes} step(s) added or removed, "
+                    f"{len(blast.cases_changed)} case(s) changed; audit -> {audit_path}"
+                )
             write_flags(paths.RUNS_DIR / f"flags_{split_name}.json", results)
             rows = to_rows(results)
             validate_output(
@@ -149,6 +189,21 @@ def main(argv: list[str] | None = None) -> int:
                 lineage=ctx.lineage,
             )
             target = paths.OUTPUT_CSV if source == paths.DELETION_REQUESTS else paths.RUNS_DIR / "sample_output.csv"
+            if (
+                blast is not None
+                and source == paths.DELETION_REQUESTS
+                and (len(blast.verdict_changes) > BLAST_MAX_VERDICTS or blast.step_changes > BLAST_MAX_STEPS)
+                and not args.accept_skeptic_blast_radius
+            ):
+                candidate = paths.RUNS_DIR / "skeptic_candidate_output.csv"
+                write_rows(candidate, rows)
+                print(
+                    f"STOP: the skeptic would change more than {BLAST_MAX_VERDICTS} verdicts or {BLAST_MAX_STEPS} steps. "
+                    f"output.csv was NOT written. Candidate: {candidate}; review the audit, then rerun with "
+                    "--accept-skeptic-blast-radius or --skeptic off.",
+                    file=sys.stderr,
+                )
+                return 3
             write_rows(target, rows)
             print(f"wrote {len(rows)} rows -> {target}")
         if args.case:

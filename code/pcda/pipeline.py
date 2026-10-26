@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from pcda import paths
 from pcda.agents.intake import IntakeDecision, IntakeResult, LLMIntakeAgent, RuleIntakeAgent, decide_intake
 from pcda.agents.perception import LLMPerceptionAgent
-from pcda.agents.skeptic import NullSkepticAgent, SkepticAgent
+from pcda.agents.skeptic import Adjustments, NullSkepticAgent, SkepticAgent
 from pcda.cases import CaseRequest, load_requests
 from pcda.category import CategoryResolver
 from pcda.facts import FactStore
@@ -60,6 +60,9 @@ class Context:
     rule_intake: RuleIntakeAgent
     llm_intake: LLMIntakeAgent | None  # None in deterministic mode
     skeptic: SkepticAgent
+    # What the code-side gate accepted from the skeptic agent, by case_id (run_skeptic fills these).
+    skeptic_adjustments: dict[str, Adjustments] = field(default_factory=dict)
+    skeptic_outcomes: dict[str, str] = field(default_factory=dict)  # "case_id:resource_id" -> outcome
     canonical: dict[str, SystemVote] = field(default_factory=dict)
     # One joint pass per (event_type, target_system); see JOINT_PASSES.
     joint: tuple[JointActivityAttribution, ...] = ()
@@ -74,6 +77,8 @@ class CaseResult:
     # CLASSIFY_REQUEST "non-deletion" activity ids on the subject's resources.
     intake_evidence: tuple[str, ...] = ()
     decision: IntakeDecision | None = None
+    # The resources the case was solved over (after canonicalization and skeptic adjustments).
+    attributions: tuple[AttributedResource, ...] = ()
 
 
 def build_context(mode: RunMode) -> Context:
@@ -155,7 +160,7 @@ def canonicalize(attributions: list[AttributedResource], ctx: Context) -> tuple[
     return result, flags
 
 
-def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
+def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult:
     rule_intake = ctx.rule_intake.classify(case.case_id, case.request_text)
     subject = ctx.closure.subject_of(normalize_email(case.email))
     flags: list[str] = []
@@ -173,6 +178,15 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
             (deferred if fallback_only else attributions).append(joint)
         elif case.case_id in joint_pass.rejected:
             flags.append(f"joint_none:{system}:{joint_pass.rejected[case.case_id]}")
+    adj = ctx.skeptic_adjustments.get(case.case_id) if adjust else None
+    if adj:
+        # Accepted by the gate; the solver below verifies the consequences.
+        have = {a.resource_id for a in attributions}
+        attributions = [a for a in attributions if a.resource_id not in adj.remove]
+        attributions += [a for a in adj.add if a.resource_id not in have]
+        deferred = [d for d in deferred if d.resource_id not in adj.remove]
+        flags.extend(f"skeptic_accepted:REMOVE:{rid}" for rid in sorted(adj.remove))
+        flags.extend(f"skeptic_accepted:ADD:{a.resource_id}" for a in adj.add)
     base_attributions = attributions
     attributions, system_flags = canonicalize(attributions, ctx)
     flags.extend(system_flags)
@@ -217,7 +231,10 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
     objections = ctx.skeptic.challenge(certificate, attributions)
     flags.extend(f"skeptic:{o.kind}:{o.target}" for o in objections)
     if certificate.verdict is not Verdict.NOT_APPLICABLE:
-        flags.extend(f"skeptic_pending:{a.resource_id}" for a in attributions if a.needs_skeptic)
+        for a in attributions:
+            if a.needs_skeptic:
+                outcome = ctx.skeptic_outcomes.get(f"{case.case_id}:{a.resource_id}")
+                flags.append(f"skeptic:{outcome}:{a.resource_id}" if outcome else f"skeptic_pending:{a.resource_id}")
     flags.extend(
         f"perception_skipped:{s.evidence_id}" for s in ctx.report.skipped if s.captured_at <= case.audit_at
     )
@@ -229,4 +246,4 @@ def run_case(case: CaseRequest, ctx: Context) -> CaseResult:
             for o in certificate.obligations
             if o.status is not ObligationStatus.DISCHARGED or o.resource_id not in emitted
         )
-    return CaseResult(certificate.with_flags(tuple(flags)), steps, intake, support, decision)
+    return CaseResult(certificate.with_flags(tuple(flags)), steps, intake, support, decision, tuple(attributions))

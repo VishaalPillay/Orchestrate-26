@@ -33,6 +33,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 11a | LLM safety branch without a negation check | First version let any validated non-deletion span win a disagreement | would have been 26/32: 6 sample deletion audits (10, 21, 26, 27, 28, 30) turned NOT_APPLICABLE on gpt-oss-120b answers | n/a | n/a | Fixed before use |
 | 12 | LLM category fallback | CATEGORY_MODEL for names the static map does not cover; masked examples, 15 categories + rule text, answer validated against the list | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept |
 | 12a | LLM-only categories for the inferred names | `PCDA_DISABLE_INFERRED=1`: the LLM must categorize case_10 and case_12's event names | 0.989 / 0.896 / 0.940 | 30/32 (0.938) | 18/32 | Rejected (static map stays primary) |
+| 13 | Skeptic agent | Tool-calling loop (gemini-3.5-flash-lite, Groq gpt-oss-120b fallback) over a risk-ordered queue, 6 read-only tools, code-side gate, hard call budget (sample 60, test 120) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as a no-change guard; no effect on `output.csv` (see below) |
 
 ### Notes per iteration
 
@@ -50,6 +51,39 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 - **11a, bug found and fixed.** The first run sent every batch to the Groq fallback: gemini-3.5-flash-lite rejects `reasoning_effort: "none"` with HTTP 400. The client now retries once at `"low"` and remembers that per model. Groq's gpt-oss-120b classified 6 sample deletion audits ("Can you verify that my account was deleted?") as non-deletion. Without a negation check the safety branch would have made all 6 NOT_APPLICABLE. The rule now requires a negating span, as specified. Those Groq answers had been cached under the Gemini key and were purged before the comparison.
 - **12, category fallback.** The model is called only when no static name decides a resource. It runs before the activity-target fallback, never in deterministic mode, and it is cached per name. On the evaluation set it mapped the screenshot-only `screen:Account events` records (`audit_record_001`, `002`, `004`, `005` and `006`, case_45) to SECURITY_AUDIT_LOG. That is the one row where live output differs from deterministic.
 - **12a, LLM-only for inferred names: rejected.** The model put both case_10's `contact_query_completed` and case_12's `contact_lookup_completed` (+`email_opt_in`) under PRODUCT_TELEMETRY ("operational events … function as telemetry"). Gold implies SECONDARY_IDENTIFIER and MARKETING_PROFILE. The static map stays primary.
+
+## Skeptic agent (iteration 13)
+
+The skeptic can only propose; `skeptic_gate.py` checks each claim against the stores and the solver solves the case again. Reproduce: `python code/main.py --mode live --split sample` (then `--split test`), `python code/tools/skeptic_report.py`, `python code/tools/skeptic_control.py`, `python code/tools/skeptic_sweep.py`.
+
+| Measurement | Samples | Test (final configuration) |
+|---|---|---|
+| Queue / investigated / never reached | 21 / 16 / 6 | 363 / 33 / 330 |
+| Model calls (budget) | 60 (60) | 105 (120) |
+| Tool calls | 45 | 75 |
+| Tokens in / out | 133,861 / 1,853 | 208,701 / 3,995 |
+| CONFIRM / CHALLENGE / PROPOSE | 15 / 0 / 0 (1 unfinished, discarded) | 30 / 0 / 0 (3 provider errors) |
+| Gate: accepted / rejected | 0 / 0 | 0 / 0 |
+| Hallucinated fact_ids; cited but never shown | 0; 0 | 0; 0 |
+| Verdicts / steps changed | 0 / 0 | 0 / 0 |
+| Step precision, recall, status | 1.000, 0.927, 32/32 | n/a |
+
+The test run stopped early: gemini-3.5-flash-lite's free-tier limit of 500 requests a day was reached, Groq's fallback failed three times, and the circuit breaker ended the queue. An earlier test run with the first prompt (JSON-in-text answer, no `submit_verdict` tool) investigated 35 targets on 120 calls (225,293 / 4,131 tokens) and also confirmed all 34 it finished. In both runs case_45 (pick 35 h from `reported_at`), case_493 and case_450 were confirmed.
+
+**Negative control** (`skeptic_control.py`: each sample account pick replaced by the next case's real pick, 11 cases): gemini-3.5-flash-lite confirmed 10 and challenged 1 (rejected by the gate: row outside the other request's window), so it caught **0 of 11** wrong picks. The gate would have accepted the perfect challenge in 4 of the 11. Groq gpt-oss-120b finished 3 cases (all CONFIRM) and failed 8 with provider errors (it emitted its answer as a call to a tool named JSON or commentary, plus 8K tokens-per-minute 429s). With these models the skeptic is a rubber stamp: its sample result shows it breaks nothing, not that it finds errors.
+
+**Gate sweep** (`skeptic_sweep.py`, no model): what the gate itself accepts when run over every candidate.
+
+| | Samples | Test |
+|---|---|---|
+| Activity picks | 12 | 207 |
+| Picks the gate would remove | 0 | 80 (163 OTHER_SUBJECT claims on the resource's own record, 5 OTHER_REQUEST) |
+| Reachable PROPOSE | 0 | 0 |
+| Effect of removing all of them | 0 verdicts, 0 steps | 36 verdicts, 359 steps, 72 cases |
+
+The 80 are activity_temporal picks (search, export, support and similar resources chosen as the only deletion_worker row near `reported_at`) whose own record carries another user's identifiers: in case_107 and case_108 the same `search_1752` is picked for two different people, and its log records resolve to a third user. The samples show none, so the sample precision of 1.000 does not exercise it. This exceeds the blast-radius limit (10 verdicts, 25 steps), so none of it was applied; `code/.cache/runs/skeptic_audit_sweep.md` lists every removal with its cited row, the gate checks and the before/after steps.
+
+The queue now ranks picks owned by another user first (87 test targets), but the test run with that queue has not been done: the Gemini quota resets about 06:50Z. Until then a replay of the test split finds no cached turns, takes the error path, and leaves `output.csv` unchanged.
 
 ## Model and strategy comparison
 

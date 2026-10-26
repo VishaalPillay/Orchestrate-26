@@ -58,6 +58,9 @@ class LineageGraph:
     def claims(self) -> list[Claim]:
         return list(self._claims)
 
+    def claim(self, activity_id: str) -> Claim | None:
+        return next((c for c in self._claims if c.activity_id == activity_id), None)
+
     def claims_for(self, resource_id: str, until: datetime) -> list[Claim]:
         return [c for c in self._claims if c.resource_id == resource_id and c.event_time <= until]
 
