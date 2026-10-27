@@ -36,6 +36,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 13 | Skeptic agent | Tool-calling loop (gemini-3.5-flash-lite, Groq gpt-oss-120b fallback) over a risk-ordered queue, 6 read-only tools, code-side gate, hard call budget (sample 60, test 120) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as a no-change guard; no effect on `output.csv` (see below) |
 | 14 | Ownership exclusivity in attribution | The model caught 0 of 11 wrong picks in the negative control and the model-free gate found 75 owner-conflicted picks, so that gate check became deterministic: an activity_temporal or activity_joint pick is refused if an ownership-eligible fact ties the resource to another user, or if two different subjects would receive it | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (36 test verdicts INCOMPLETE -> COMPLETE) |
 | 15 | Global forced assignment | Joint passes become one constraint propagation over all 550 requests (`identity.propagate`): a row serves one request, a resource one subject, account results match `reported_status`, exclusivity (`conflicting_owner`) and identifier ownership are hard constraints inside the loop, activity_temporal picks are held as forced singletons; simultaneous rounds, no time tie-breaks. Added a two-sided analytics pass (row also forced to the request, window `[requested_at, audit_at]`) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as the formulation (no output change on samples or test; order-independent under 3 shuffles). Analytics stays fallback-only: two-sided forcing gained 0 sample rows |
+| 16 | Analytics without result-matching | Data check (`code/tools/status_result_check.py`, identifier-attributed resources only, no gold): account row results track `reported_status` in 252 of 253 cases with a row (every NOT_STARTED row is FAILED), analytics results do not (COMPLETE cases: 21 FAILED, 4 PARTIAL, 3 SUCCESS). Experiment: both analytics passes drop result-matching | 1.000 / 0.922 / 0.960 | 31/32 (0.969) | 20/32 | Reverted: case_04 loses `analytics_901` (more candidates, nothing forced); test unchanged; two-sided still assigns 0 |
 
 ### Notes per iteration
 
@@ -121,6 +122,18 @@ The added steps are the evidence-citing verifications that a COMPLETE case carri
 | Rows changed | 0 | 0 (deterministic and replay `output.csv` byte-identical to before) |
 
 The 5 contested sample accounts stay unassigned because the data does not force them: each case keeps 3 to 4 feasible rows (for example case_28 and case_29 share `account_5482` and `account_7012`, alongside `account_5715` and `account_9862`, which no request in either file claims). Rows of people outside the dataset are exactly what a forced-only rule must not resolve. Two-sided analytics with result-matching assigns nothing anywhere, so it failed the bar (at least 2 sample analytics rows gained) and the one-sided analytics pass stays fallback-only, with the two-sided pass alongside it.
+
+### Iteration 16: analytics result-match (reverted)
+
+The assumption behind result-matching holds for accounts and fails for analytics. Rows inside `[requested_at, audit_at]` for resources attributed by identifiers, over all 550 requests:
+
+| reported_status | account FAILED | PARTIAL | SUCCESS | analytics FAILED | PARTIAL | SUCCESS |
+|---|---|---|---|---|---|---|
+| COMPLETE | 0 | 0 | 133 | 21 | 4 | 3 |
+| NOT_STARTED | 50 | 0 | 0 | 19 | 1 | 0 |
+| PARTIALLY_COMPLETE | 0 | 69 | 1 | 23 | 3 | 3 |
+
+So `reported_status` summarizes the account step only. Dropping result-matching for analytics is still the wrong move for a forced-only rule, because it only widens each request's candidate set: the one-sided fallback pass falls from 41 to 20 test assignments and loses the one correct sample pick (case_04 becomes the NOT_APPLICABLE fallback again), and the two-sided pass stays at 0. Result-matching on analytics is kept as a filter that happens to reduce candidates, and is documented as having no causal basis in the data. The 6 identifier-less sample analytics rows stay missed.
 
 ## Model and strategy comparison
 
