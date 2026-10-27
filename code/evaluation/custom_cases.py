@@ -183,6 +183,24 @@ def m_tombstone_pii(root: Path) -> None:
     bundle.write_text(json.dumps(doc, indent=1), encoding="utf-8")
 
 
+def m_activity_pick_other_owner(root: Path) -> None:
+    # case_10's account_010 is linked only by activity_3595 (deletion_worker, 0.6 min from reported_at).
+    # A profile ledger inside the request window now records account_010 under user_02's email.
+    _add_evidence(root, "evidence_9003", "evidence/records/custom_profile_ledger.json",
+                  "custom_overlay", "2026-09-01T09:00:00Z", {
+                      "exported_at": "2026-09-01T09:00:00Z",
+                      "origin": "custom_overlay",
+                      "records": [{
+                          "recorded_at": "2026-09-01T09:00:00Z",
+                          "system": "account_service",
+                          "resource_id": "account_010",
+                          "record_type": "USER_PROFILE",
+                          "result": "FOUND",
+                          "subject_reference": "mateo.rios@outlook.com",
+                      }],
+                  })
+
+
 F, R, V = "FINDING", "REMEDIATION", "VERIFICATION"
 
 CASES: tuple[CustomCase, ...] = (
@@ -280,6 +298,23 @@ CASES: tuple[CustomCase, ...] = (
             (V, "security_service", "audit_record_6909", "VERIFY_RECORD_PRESENT", "PRESENT", ""),
             (V, "identity_service", "tombstone_440", "VERIFY_RECORD_REDACTED", "REDACTED", ""),
         ),
+    ),
+    CustomCase(
+        "7 activity pick owned by another user", "case_10",
+        tests="An activity_temporal pick is refused when a record of that resource names another user.",
+        why="A deletion_worker row near reported_at is a timing claim, not ownership: taking it would report and "
+            "delete someone else's account (iteration 14 refused 87 such test picks).",
+        mutation="new ledger evidence_9003 (2026-09-01, inside the request window): account_010 FOUND for "
+                 "mateo.rios@outlook.com (user_02)",
+        # Without account_010, case_10's only feasible row is account_4990, which case_22 is also forced
+        # to: the propagation refuses both, so case_10 gets no account at all rather than a guess.
+        mutate=m_activity_pick_other_owner, expected_status="INCOMPLETE",
+        expected_steps=(
+            (F, "support_platform", "support_002", "REPORT_REMAINING_RECORD", "PRESENT", "evidence_61"),
+            (R, "support_platform", "support_002", "DELETE_RECORD", "ABSENT", ""),
+            (V, "support_platform", "support_002", "VERIFY_RECORD_ABSENT", "ABSENT", ""),
+        ),
+        must_not_contain=("account_010", "account_4990"),
     ),
 )
 

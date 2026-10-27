@@ -15,7 +15,7 @@ Samples (32 cases, `python code/evaluation/score.py --diff`):
 
 Evaluation set: `output.csv` at the repo root comes from `--mode live` and is reproduced byte for byte by `--mode replay`. It has 518 sorted rows and passes the validator: 354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE. Of those 11, 10 come from intake and 1 (case_61) is the no-provable-obligation fallback. `--mode deterministic` differs in exactly 1 row (case_45, see below).
 
-Custom overlays: 7/7 pass. Step-aligned field accuracy is 1.000 on every field, so every sample loss is a missing step, never a wrong one.
+Custom overlays: 8/8 pass. Step-aligned field accuracy is 1.000 on every field, so every sample loss is a missing step, never a wrong one.
 
 Reproduce (no provider calls; everything comes from `code/.cache/llm/`):
 
@@ -24,7 +24,7 @@ Reproduce (no provider calls; everything comes from `code/.cache/llm/`):
 .venv/Scripts/python.exe code/main.py --mode deterministic --split all   # rules only; differs in case_45
 .venv/Scripts/python.exe code/evaluation/score.py --diff
 .venv/Scripts/python.exe -m pytest code/tests -q
-.venv/Scripts/python.exe code/evaluation/custom_cases.py      # 7 overlays, all pass
+.venv/Scripts/python.exe code/evaluation/custom_cases.py      # 8 overlays, all pass
 .venv/Scripts/python.exe code/evaluation/main.py --write      # rewrites the Metrics and Custom sections
 ```
 
@@ -46,7 +46,11 @@ Reproduce (no provider calls; everything comes from `code/.cache/llm/`):
 | `6786f09`, `212eacc` | Burden-of-proof flip audit (case_55: correct); custom overlay cases and the full metrics report |
 | `d1d528b` | LLM intake + hybrid decision, LLM category fallback, aligned field accuracy, model and strategy comparison, live output |
 | `55a263e` | Skeptic agent, gate and controls (tools, loop, queue, gate, blast-radius audit, probe, negative control, model-free sweep) |
-| (next commit) | Ownership exclusivity in attribution (87 test picks refused, 36 verdicts to COMPLETE), skeptic skipped on test, replayable live output |
+| `5999bc2` | Ownership exclusivity in attribution (87 test picks refused, 36 verdicts to COMPLETE), skeptic skipped on test, replayable live output |
+| `aa3f6e5` | Global forced assignment (`identity.propagate`): exclusivity inside the propagation, order-independent; no output change (iteration 15) |
+| `d18180a` | Analytics result-match check: `reported_status` tracks the account row only; dropping analytics result-matching reverted (iteration 16) |
+| `509cd25` | Test-side leak audit and invariants; staleness gate spares `user_id` matches (case_34 +1 step) (iteration 17) |
+| (next commit) | 8th custom overlay: activity pick owned by another user is refused |
 
 `55a263e` adds the skeptic agent, gate and controls; the next commit adds ownership exclusivity and skips the skeptic on test. The working tree is clean after the last commit. 73 tests pass. `log.txt` (git-ignored) has every turn.
 
@@ -61,6 +65,7 @@ Reproduce (no provider calls; everything comes from `code/.cache/llm/`):
 5. **Activity-joint outliers.** case_45 (row 35 hours before `reported_at`) and case_493 (−131 min) are accepted picks far outside the sample timing; both are flagged `skeptic_pending`. The skeptic is a no-op in deterministic mode.
 6. **LLM quota** (gemini-3.6-flash also ran out during the intake comparison, so its column is pending). The free tier exhausted gemini-3.8-flash and gemini-3.7-flash today. gemini-3.6-flash, 3.5-flash, 3.5-flash-lite and 3.1-flash-lite answered a probe. Groq's `gpt-oss-120b` rejects images; Groq's `qwen/qwen3.8-27b` accepts images ≥ 32 px and could be the vision fallback. Calls can take 2 minutes; use `LLM_TIMEOUT_S=300`.
 7. **`check_attribution.py` doesn't run the joint passes,** so its 90/111 understates current attribution.
+8. **Live re-run after the 2026-10-25 changes (iterations 15–17):** `--mode replay --split all` reproduces the new `output.csv` with zero cache misses (sample skeptic 60/60 cached), so no new category names or skeptic targets need a provider call. A live run should make 0 calls; replay must then stay byte-identical. Biggest known test leak: 144 of 507 deletion cases have no account step (no forced row), see iteration 17.
 
 ## Known accepted misses (samples, 14 steps)
 

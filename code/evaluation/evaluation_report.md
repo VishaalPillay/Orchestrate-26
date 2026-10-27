@@ -216,11 +216,11 @@ fields only over those pairs; it measures whether a step that was found is right
 missing or extra steps (phase and resource_id are 1.000 by construction). Edit distance is Levenshtein over whole
 steps (all six fields), divided by the longer length.
 
-| Metric | Samples (32) | Custom overlays (7) |
+| Metric | Samples (32) | Custom overlays (8) |
 |---|---|---|
-| Cases | 32 | 7 |
-| Status accuracy | 32/32 (1.000) | 7/7 (1.000) |
-| Steps (gold / predicted / matched) | 193 / 179 / 179 | 31 / 31 / 31 |
+| Cases | 32 | 8 |
+| Status accuracy | 32/32 (1.000) | 8/8 (1.000) |
+| Steps (gold / predicted / matched) | 193 / 179 / 179 | 34 / 34 / 34 |
 | Step precision / recall / F1 | 1.000 / 0.927 / 0.962 | 1.000 / 1.000 / 1.000 |
 | Field accuracy, positional: phase | 0.927 | 1.000 |
 | Field accuracy, positional: system_id | 0.803 | 1.000 |
@@ -228,14 +228,14 @@ steps (all six fields), divided by the longer length.
 | Field accuracy, positional: operation | 0.824 | 1.000 |
 | Field accuracy, positional: state | 0.824 | 1.000 |
 | Field accuracy, positional: evidence_id | 0.922 | 1.000 |
-| Step-aligned pairs | 179 | 31 |
+| Step-aligned pairs | 179 | 34 |
 | Field accuracy, step-aligned: phase | 1.000 | 1.000 |
 | Field accuracy, step-aligned: system_id | 1.000 | 1.000 |
 | Field accuracy, step-aligned: resource_id | 1.000 | 1.000 |
 | Field accuracy, step-aligned: operation | 1.000 | 1.000 |
 | Field accuracy, step-aligned: state | 1.000 | 1.000 |
 | Field accuracy, step-aligned: evidence_id | 1.000 | 1.000 |
-| Sequence accuracy (exact ordered steps) | 20/32 (0.625) | 7/7 (1.000) |
+| Sequence accuracy (exact ordered steps) | 20/32 (0.625) | 8/8 (1.000) |
 | Mean normalized edit distance | 0.088 | 0.000 |
 
 ### Per-case diff: samples
@@ -291,6 +291,7 @@ unchanged expectation equals that sample's published answer. Run them with `pyth
 | 5a historical email in the request, uppercased | case_10 | request email -> NADIA.PETRESCU@YAHOO.COM (user_10's second email, audit_121/audit_238) | A request filed under an intermediate historical email, in upper case, resolves to the same subject. | Requests may come from any past address; normalization and the audit-log closure must both hold. | INCOMPLETE, 4 steps | pass (INCOMPLETE) |
 | 5b historical email in evidence, uppercased | case_10 | evidence_61: lookup_key=nadia.ionescu@yahoo.com -> NADIA.IONESCU@YAHOO.COM | Evidence that names the subject only by an old email, in upper case, still attributes the resource. | Legacy systems keep old identifiers in arbitrary case; support_002's only link is that old email. | INCOMPLETE, 4 steps | pass (INCOMPLETE) |
 | 6 tombstone with PII | case_31 | evidence_51: tombstone_440 name -> 'Ada Eze', email -> a.eze08@gmail.com | A tombstone that regains direct identifiers is exposed PII to redact, not a record to delete. | ACCOUNT_TOMBSTONE is REDACT: keep the stable user reference, remove name/email/phone/hash. | INCOMPLETE, 5 steps | pass (INCOMPLETE) |
+| 7 activity pick owned by another user | case_10 | new ledger evidence_9003 (2026-09-01, inside the request window): account_010 FOUND for mateo.rios@outlook.com (user_02) | An activity_temporal pick is refused when a record of that resource names another user. | A deletion_worker row near reported_at is a timing claim, not ownership: taking it would report and delete someone else's account (iteration 14 refused 87 such test picks). | INCOMPLETE, 3 steps; never account_010, account_4990 | pass (INCOMPLETE) |
 
 Every mutation was confirmed to reach the fact store, so no pass is vacuous:
 - case 2's post-audit ABSENCE is ingested and then excluded by `as_of(audit_at)`;
