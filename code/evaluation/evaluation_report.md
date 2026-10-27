@@ -38,6 +38,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 15 | Global forced assignment | Joint passes become one constraint propagation over all 550 requests (`identity.propagate`): a row serves one request, a resource one subject, account results match `reported_status`, exclusivity (`conflicting_owner`) and identifier ownership are hard constraints inside the loop, activity_temporal picks are held as forced singletons; simultaneous rounds, no time tie-breaks. Tried a two-sided analytics pass (row also forced to the request, window `[requested_at, audit_at]`) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as the formulation (no output change on samples or test; order-independent under 3 shuffles). Analytics stays fallback-only: two-sided forcing assigned 0 rows on either split and is not wired in |
 | 16 | Analytics without result-matching | Data check (`code/tools/status_result_check.py`, identifier-attributed resources only, no gold): account row results track `reported_status` in 252 of 253 cases with a row (every NOT_STARTED row is FAILED), analytics results do not (COMPLETE cases: 21 FAILED, 4 PARTIAL, 3 SUCCESS). Experiment: both analytics passes drop result-matching | 1.000 / 0.922 / 0.960 | 31/32 (0.969) | 20/32 | Reverted: case_04 loses `analytics_901` (more candidates, nothing forced); test unchanged; two-sided still assigns 0 |
 | 17 | Test-side leak audit + stable user_id | `code/tools/leak_audit.py` (every flag and silent rejection by type, test vs samples) and `code/tools/invariants.py` (citation, shared resources, account verification, audit-record retention, per-system shares). One generic fix: the staleness gate no longer rejects a candidate matched on the subject's own `user_id`, which is never reassigned (the gate exists for recycled emails and phones, the case_17 decoy) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (1 test row: case_34 gains VERIFY_RECORD_PRESENT `audit_record_3753`) |
+| 18 | Nearest-row tie-breaker (`activity_ranked`) | Experiment reversing "never break ties by time": for requests with no account, the feasible row nearest `reported_at`, one global pass (largest rank-1/rank-2 margin first, exclusivity kept), adding only the account VERIFY step (verdict changes asserted 0). Validation on forced picks (`code/tools/rank_validation.py`, no gold): rank 1 = forced pick 129/133 (0.970), but only 23 had 2+ feasible rows: 22/23 | 0.978 / 0.938 / 0.958 | 32/32 (1.000) | n/a | Reverted: F1 fell; 2 of 6 sample picks correct (cases 18, 32); test would gain 135 account steps, 0 verdict changes |
 
 ### Notes per iteration
 
@@ -167,6 +168,22 @@ Invariants over the output:
 Invariant 3 is the measurable recall gap the samples understate: about 144 test cases are missing their account steps. Its root cause is accounts that no evidence forces (iteration 15). Assigning them anyway would mean breaking ties by time distance, which is ruled out.
 
 **Fix kept:** the staleness gate now spares a candidate matched on the subject's `user_id`. Samples unchanged, 1 test row changed (case_34 adds `VERIFY_RECORD_PRESENT security_service/audit_record_3753`, evidence `""`, because its only fact is captured before `audit_at` but the case is INCOMPLETE). Not fixed, with reasons: the support category conflicts (no basis), case_45 in deterministic mode (live output already correct), and the 98 missing accounts (not forced).
+
+### Iteration 18: nearest-row tie-breaker (reverted, evidence for abstaining)
+
+The bar was at least 90% agreement on cases whose answer is already known, then a rise in sample F1. The tie-breaker passed the first test and failed the second.
+
+| Validation (forced picks hidden, feasible rows before elimination) | Agree |
+|---|---|
+| activity_joint, samples / test | 6/6, 121/122 |
+| activity_temporal, samples | 2/5 (3 picks lie outside their own feasible set: PARTIALLY_COMPLETE status with a SUCCESS row) |
+| All | 129/133 = 0.970 |
+| Only cases with 2+ feasible rows | 22/23 = 0.957 |
+| By gap of the forced pick: <=15 min / 15-60 min / 1-3 h / >3 h | 2/2, 67/67, 59/60, 1/1 |
+| Rank-1/rank-2 margin, agreeing joint picks (n=20) | min 49, median 1424, max 4191 min |
+| Margin of the one disagreement | 79 min (inside the agreeing range, so margin cannot gate it) |
+
+Applied to the 6 sample requests that end with no account, it picked 2 correctly (case_18 `account_5521`, case_32 `account_8858`). It missed case_23 (`account_9155` for gold `account_410`), swapped case_28 and case_29 (`account_7012` and `account_5482` are exactly each other's gold), and gave case_04 `account_5661` (gold `account_004` is in no participant file). Step P/R/F1 went 1.000/0.927/0.962 -> 0.978/0.938/0.958. On test it would add 135 VERIFY_RECORD_ABSENT steps with 0 verdict changes. The validation set overstates accuracy because 110 of its 133 cases had a single feasible row, so agreement there is automatic. The real contested cases have several rows close in time, and there the rule is near chance (2/6). Abstaining stays the decision.
 
 ## Model and strategy comparison
 
