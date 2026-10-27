@@ -36,14 +36,17 @@ from pcda.solver import Certificate, ObligationStatus, Verdict, solve
 
 
 # Activity rows that may link a resource to a request when nothing else does.
-# (event_type, target_system, fallback_only). A fallback_only pass is used only
-# when the case would otherwise have no provable obligation at all (the
-# NOT_APPLICABLE fallback). Analytics is restricted: on the samples it made 1
-# correct pick, while 3 cases with no analytics record (01, 14, 31) reached a
-# single candidate and were stopped only because another case contested it.
-JOINT_PASSES: tuple[tuple[str, str, bool], ...] = (
-    ("DELETE_RECORD", "account_service", False),
-    ("ANONYMIZE_RECORD", "analytics_platform", True),
+# (event_type, target_system, fallback_only, build options). A fallback_only pass
+# is used only when the case would otherwise have no provable obligation at all
+# (the NOT_APPLICABLE fallback). One-sided analytics stays fallback-only: on the
+# samples it made 1 correct pick, while 3 cases with no analytics record (01, 14,
+# 31) reached a single candidate and were stopped only because another case
+# contested it. The two-sided analytics pass assigns a row only when the row is
+# also forced to the request, within the case's own [requested_at, audit_at].
+JOINT_PASSES: tuple[tuple[str, str, bool, dict[str, bool]], ...] = (
+    ("DELETE_RECORD", "account_service", False, {}),
+    ("ANONYMIZE_RECORD", "analytics_platform", True, {}),
+    ("ANONYMIZE_RECORD", "analytics_platform", False, {"two_sided": True, "until_reported": False}),
 )
 FALLBACK_FLAG = "fallback_no_provable_obligation"
 
@@ -106,8 +109,8 @@ def build_context(mode: RunMode) -> Context:
         llm_intake = LLMIntakeAgent(llm)
         llm_intake.prepare([(c.case_id, c.request_text) for c in every_case])
     joint = tuple(
-        JointActivityAttribution.build(every_case, closure, store, lineage, event_type=e, target_system=t)
-        for e, t, _ in JOINT_PASSES
+        JointActivityAttribution.build(every_case, closure, store, lineage, event_type=e, target_system=t, **opts)
+        for e, t, _, opts in JOINT_PASSES
     )
     shared_picks = find_shared_picks(every_case, closure, store, lineage, joint)
     return Context(
@@ -209,7 +212,12 @@ def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult
         f"activity_pick_refused:{r.resource_id}:{r.conflict_fact}:{r.conflict_user}" for r in rejected_links if r.conflict_fact
     )
     deferred: list[AttributedResource] = []  # fallback_only joint links
-    for (_, system, fallback_only), joint_pass in zip(JOINT_PASSES, ctx.joint):
+    for (_, system, fallback_only, _), joint_pass in zip(JOINT_PASSES, ctx.joint):
+        if case.case_id in joint_pass.refused_holds:
+            # The forced assignment found this activity_temporal pick contradicted by another request.
+            held, why = joint_pass.refused_holds[case.case_id]
+            flags.append(f"activity_pick_refused:{held}:forced_conflict:{why}")
+            attributions = [a for a in attributions if not (a.tier in ACTIVITY_TIERS and a.resource_id == held)]
         joint = joint_pass.assigned.get(case.case_id)
         if joint is not None and not any(a.resource_id == joint.resource_id for a in attributions):
             (deferred if fallback_only else attributions).append(joint)

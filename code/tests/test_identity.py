@@ -257,3 +257,37 @@ def test_activity_joint_refuses_an_account_two_cases_would_claim(tmp_path):
     assert "case_a" not in joint.assigned and "case_d" not in joint.assigned
     assert "also the only candidate" in joint.rejected["case_a"]
     assert joint.assigned["case_b"].resource_id == "account_2"
+
+
+# --- propagate: forced assignment ---------------------------------------------------------------
+
+
+def test_propagate_is_order_independent_and_refuses_contradictions():
+    from pcda.identity import propagate
+
+    resource_of = {"r1": "acc_1", "r2": "acc_2", "r3": "acc_3"}
+    subject_of = {"a": "user_a", "b": "user_b", "c": "user_c", "d": "user_d"}
+    cands = {"a": frozenset({"r1"}), "b": frozenset({"r1", "r2"}), "c": frozenset({"r3"}), "d": frozenset({"r3"})}
+    results = set()
+    for order in (["a", "b", "c", "d"], ["d", "c", "b", "a"], ["b", "d", "a", "c"]):
+        out = propagate({k: cands[k] for k in order}, resource_of, subject_of, eligible=frozenset(cands), two_sided=False)
+        results.add((tuple(out.assigned.items()), tuple(out.refused.items())))
+    assert len(results) == 1
+    out = propagate(cands, resource_of, subject_of, eligible=frozenset(cands), two_sided=False)
+    # a is forced to acc_1, which leaves b with acc_2; c and d contradict each other on acc_3.
+    assert out.assigned == {"a": "acc_1", "b": "acc_2"}
+    assert set(out.refused) == {"c", "d"} and "also the only candidate" in out.refused["c"]
+
+
+def test_propagate_two_sided_needs_the_row_forced_too():
+    from pcda.identity import propagate
+
+    resource_of = {"r1": "an_1", "r2": "an_2"}
+    subject_of = {"a": "user_a", "b": "user_b", "x": "user_x"}
+    # b wants an_1 and an_2, so an_1 is not forced to a; x competes but is not eligible.
+    cands = {"a": frozenset({"r1"}), "b": frozenset({"r1", "r2"}), "x": frozenset({"r2"})}
+    out = propagate(cands, resource_of, subject_of, eligible=frozenset({"a", "b"}), two_sided=True)
+    assert out.assigned == {}
+    out = propagate({"a": frozenset({"r1"}), "x": frozenset({"r2"})}, resource_of, subject_of,
+                    eligible=frozenset({"a"}), two_sided=True)
+    assert out.assigned == {"a": "an_1"}

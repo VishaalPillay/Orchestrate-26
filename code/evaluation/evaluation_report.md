@@ -35,6 +35,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 12a | LLM-only categories for the inferred names | `PCDA_DISABLE_INFERRED=1`: the LLM must categorize case_10 and case_12's event names | 0.989 / 0.896 / 0.940 | 30/32 (0.938) | 18/32 | Rejected (static map stays primary) |
 | 13 | Skeptic agent | Tool-calling loop (gemini-3.5-flash-lite, Groq gpt-oss-120b fallback) over a risk-ordered queue, 6 read-only tools, code-side gate, hard call budget (sample 60, test 120) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as a no-change guard; no effect on `output.csv` (see below) |
 | 14 | Ownership exclusivity in attribution | The model caught 0 of 11 wrong picks in the negative control and the model-free gate found 75 owner-conflicted picks, so that gate check became deterministic: an activity_temporal or activity_joint pick is refused if an ownership-eligible fact ties the resource to another user, or if two different subjects would receive it | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (36 test verdicts INCOMPLETE -> COMPLETE) |
+| 15 | Global forced assignment | Joint passes become one constraint propagation over all 550 requests (`identity.propagate`): a row serves one request, a resource one subject, account results match `reported_status`, exclusivity (`conflicting_owner`) and identifier ownership are hard constraints inside the loop, activity_temporal picks are held as forced singletons; simultaneous rounds, no time tie-breaks. Added a two-sided analytics pass (row also forced to the request, window `[requested_at, audit_at]`) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as the formulation (no output change on samples or test; order-independent under 3 shuffles). Analytics stays fallback-only: two-sided forcing gained 0 sample rows |
 
 ### Notes per iteration
 
@@ -107,6 +108,19 @@ Measured against the committed output of the iteration-13 code (live mode):
 | New NOT_APPLICABLE fallbacks | | 0 (still the 10 from intake plus case_61) |
 
 The added steps are the evidence-citing verifications that a COMPLETE case carries and an INCOMPLETE one does not. Account steps changed in 16 cases, every one of them a case whose own account pick was refused: 14 lost it and 2 got a different account from the joint pass (case_206: account_1065 -> account_4522; case_328: account_8264 -> account_206), which now sees them as open. No case without a refusal changed its accounts.
+
+### Iteration 15: global forced assignment
+
+`identity.propagate` replaces the greedy elimination. Before, exclusivity refusals (`conflicting_owner`, `find_shared_picks`) ran after the joint pass, so a later-refused row could already have eliminated candidates elsewhere. Now every constraint is inside the loop. Each round takes every forced request at once: one subject forced to a resource takes it and the resource leaves every other subject's request; two subjects forced to the same resource are both refused. A round reads a snapshot and only removes, so the result cannot depend on request order. `code/tools/joint_order_check.py` builds every pass in file order and under seeds 11, 2026 and 90210: identical assignments, refusals and refused holds.
+
+| | Samples | Test |
+|---|---|---|
+| Step P / R / F1, status | 1.000 / 0.927 / 0.962, 32/32 (unchanged) | n/a |
+| Account assignments | unchanged | 128 assigned, 139 refused, 12 activity_temporal holds refused as contradictions (the same 12 clause 2 already refused); 0 added, 0 removed, 0 changed |
+| Two-sided analytics | 0 assigned | 0 assigned (471 requests: no row is forced on both sides) |
+| Rows changed | 0 | 0 (deterministic and replay `output.csv` byte-identical to before) |
+
+The 5 contested sample accounts stay unassigned because the data does not force them: each case keeps 3 to 4 feasible rows (for example case_28 and case_29 share `account_5482` and `account_7012`, alongside `account_5715` and `account_9862`, which no request in either file claims). Rows of people outside the dataset are exactly what a forced-only rule must not resolve. Two-sided analytics with result-matching assigns nothing anywhere, so it failed the bar (at least 2 sample analytics rows gained) and the one-sided analytics pass stays fallback-only, with the two-sided pass alongside it.
 
 ## Model and strategy comparison
 
