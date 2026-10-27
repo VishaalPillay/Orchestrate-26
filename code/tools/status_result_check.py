@@ -17,6 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dotenv import load_dotenv  # noqa: E402
+
 from pcda import paths  # noqa: E402
 from pcda.cases import load_requests  # noqa: E402
 from pcda.identity import ResourceAttribution, normalize_email  # noqa: E402
@@ -27,6 +29,7 @@ PASSES = (("account_service", "DELETE_RECORD"), ("analytics_platform", "ANONYMIZ
 
 
 def main() -> int:
+    load_dotenv(paths.ENV_FILE)  # the perception cache is keyed on PERCEPTION_MODEL
     ctx = build_context(RunMode.DETERMINISTIC)
     every = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
     for system, event_type in PASSES:

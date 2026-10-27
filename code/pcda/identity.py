@@ -220,6 +220,9 @@ class _Candidate:
     evidence: set[str] = field(default_factory=set)
     late_evidence: set[str] = field(default_factory=set)
     latest: datetime | None = None  # newest supporting observation, any tier
+    # Matched on the subject's user_id: a stable internal reference is never
+    # reassigned, so it cannot describe an earlier life of a recycled identifier.
+    stable: bool = False
 
     def add(
         self,
@@ -229,7 +232,9 @@ class _Candidate:
         evidence: str,
         at: datetime,
         late: bool = False,
+        stable: bool = False,
     ) -> None:
+        self.stable |= stable
         if self.latest is None or at > self.latest:
             self.latest = at
         if tier < self.tier:
@@ -303,7 +308,7 @@ class ResourceAttribution:
                 if fact.fact_id in seen or fact.resource_id is None:
                     continue
                 seen.add(fact.fact_id)
-                ResourceAttribution._from_fact(fact, ident, cands, case.audit_at)
+                ResourceAttribution._from_fact(fact, ident, cands, case.audit_at, stable=ident == user_id)
         claim_system: dict[str, str] = {}
         for claim in lineage.claims:
             claim_system.setdefault(claim.resource_id, claim.target_system)
@@ -347,13 +352,13 @@ class ResourceAttribution:
             for rid, c in cands.items()
             if rid not in post_audit_only
             and c.latest is not None
-            and c.latest >= case.requested_at
+            and (c.latest >= case.requested_at or c.stable)
         ]
         rejected = []
         for rid, c in sorted(cands.items()):
             if rid in post_audit_only:
                 why = "post-audit: no fact observed and no activity row at or before audit_at"
-            elif c.latest is not None and c.latest < case.requested_at:
+            elif c.latest is not None and c.latest < case.requested_at and not c.stable:
                 why = (
                     f"stale: newest supporting observation {c.latest:%Y-%m-%d} precedes "
                     f"requested_at {case.requested_at:%Y-%m-%d}"
@@ -391,7 +396,9 @@ class ResourceAttribution:
         return out, rejected
 
     @staticmethod
-    def _from_fact(fact: Fact, ident: str, cands: dict[str, _Candidate], audit_at: datetime) -> None:
+    def _from_fact(
+        fact: Fact, ident: str, cands: dict[str, _Candidate], audit_at: datetime, stable: bool = False
+    ) -> None:
         assert fact.resource_id is not None
         table = fact.attrs.get(ATTR_TABLE, "?")
         late = fact.captured_at > audit_at or fact.observed_at > audit_at
@@ -405,6 +412,7 @@ class ResourceAttribution:
                 fact.evidence_id,
                 fact.observed_at,
                 late,
+                stable,
             )
             return
         tier = _SRC_TIER.get(fact.attrs.get(ATTR_SRC, ""), LinkTier.LOG_TRACE)
@@ -415,6 +423,7 @@ class ResourceAttribution:
             fact.evidence_id,
             fact.observed_at,
             late,
+            stable,
         )
 
     @staticmethod
@@ -571,7 +580,7 @@ def propagate(
                 if other not in cids and subject_of[other] not in keep:
                     live[other] = {r for r in live[other] if resource_of[r] != rid}
     for cid in sorted(eligible - done):
-        refused[cid] = f"{len(resources(cid))} candidate resources remain"
+        refused[cid] = f"{len(resources(cid))} candidate rows remain"
     return Propagation(dict(sorted(assigned.items())), dict(sorted(refused.items())))
 
 
@@ -726,7 +735,8 @@ class JointActivityAttribution:
                     f"activity_joint: {c.activity_id} deletion_worker {event_type} {c.reported_result} "
                     f"{(c.event_time - case.reported_at).total_seconds() / 60:+.1f} min from reported_at"
                     + (f", consistent with reported_status {case.reported_status}" if match_result else "")
-                    + ("; forced on both sides" if two_sided else "; forced: sole remaining candidate"),
+                    # One-sided wording is unchanged from the greedy pass: the skeptic's cache keys include it.
+                    + ("; forced on both sides" if two_sided else "; sole remaining candidate"),
                 ),
                 evidence_ids=(c.activity_id,),
                 needs_skeptic=True,

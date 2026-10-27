@@ -41,12 +41,16 @@ from pcda.solver import Certificate, ObligationStatus, Verdict, solve
 # (the NOT_APPLICABLE fallback). One-sided analytics stays fallback-only: on the
 # samples it made 1 correct pick, while 3 cases with no analytics record (01, 14,
 # 31) reached a single candidate and were stopped only because another case
-# contested it. The two-sided analytics pass assigns a row only when the row is
-# also forced to the request, within the case's own [requested_at, audit_at].
+# contested it. A two-sided analytics pass (the row also forced to the request,
+# within [requested_at, audit_at]) assigns 0 rows on either split, with or without
+# result-matching (iterations 15 and 16), so it is not wired in: TWO_SIDED_ANALYTICS
+# is kept for code/tools/joint_order_check.py.
 JOINT_PASSES: tuple[tuple[str, str, bool, dict[str, bool]], ...] = (
     ("DELETE_RECORD", "account_service", False, {}),
     ("ANONYMIZE_RECORD", "analytics_platform", True, {}),
-    ("ANONYMIZE_RECORD", "analytics_platform", False, {"two_sided": True, "until_reported": False}),
+)
+TWO_SIDED_ANALYTICS: tuple[str, str, bool, dict[str, bool]] = (
+    "ANONYMIZE_RECORD", "analytics_platform", False, {"two_sided": True, "until_reported": False},
 )
 FALLBACK_FLAG = "fallback_no_provable_obligation"
 

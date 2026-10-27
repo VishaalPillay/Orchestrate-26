@@ -7,7 +7,7 @@ python code/main.py --mode deterministic --split all
 python code/evaluation/score.py --diff
 ```
 
-Current (iteration 14): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
+Current (iteration 17): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
 
 Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` comes from `--mode live` and is reproduced byte for byte by `--mode replay` from `code/.cache/llm/`. Model stages: screenshot perception, LLM intake and the category fallback. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row and scores the same on samples.
 
@@ -35,8 +35,9 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 12a | LLM-only categories for the inferred names | `PCDA_DISABLE_INFERRED=1`: the LLM must categorize case_10 and case_12's event names | 0.989 / 0.896 / 0.940 | 30/32 (0.938) | 18/32 | Rejected (static map stays primary) |
 | 13 | Skeptic agent | Tool-calling loop (gemini-3.5-flash-lite, Groq gpt-oss-120b fallback) over a risk-ordered queue, 6 read-only tools, code-side gate, hard call budget (sample 60, test 120) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as a no-change guard; no effect on `output.csv` (see below) |
 | 14 | Ownership exclusivity in attribution | The model caught 0 of 11 wrong picks in the negative control and the model-free gate found 75 owner-conflicted picks, so that gate check became deterministic: an activity_temporal or activity_joint pick is refused if an ownership-eligible fact ties the resource to another user, or if two different subjects would receive it | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (36 test verdicts INCOMPLETE -> COMPLETE) |
-| 15 | Global forced assignment | Joint passes become one constraint propagation over all 550 requests (`identity.propagate`): a row serves one request, a resource one subject, account results match `reported_status`, exclusivity (`conflicting_owner`) and identifier ownership are hard constraints inside the loop, activity_temporal picks are held as forced singletons; simultaneous rounds, no time tie-breaks. Added a two-sided analytics pass (row also forced to the request, window `[requested_at, audit_at]`) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as the formulation (no output change on samples or test; order-independent under 3 shuffles). Analytics stays fallback-only: two-sided forcing gained 0 sample rows |
+| 15 | Global forced assignment | Joint passes become one constraint propagation over all 550 requests (`identity.propagate`): a row serves one request, a resource one subject, account results match `reported_status`, exclusivity (`conflicting_owner`) and identifier ownership are hard constraints inside the loop, activity_temporal picks are held as forced singletons; simultaneous rounds, no time tie-breaks. Tried a two-sided analytics pass (row also forced to the request, window `[requested_at, audit_at]`) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept as the formulation (no output change on samples or test; order-independent under 3 shuffles). Analytics stays fallback-only: two-sided forcing assigned 0 rows on either split and is not wired in |
 | 16 | Analytics without result-matching | Data check (`code/tools/status_result_check.py`, identifier-attributed resources only, no gold): account row results track `reported_status` in 252 of 253 cases with a row (every NOT_STARTED row is FAILED), analytics results do not (COMPLETE cases: 21 FAILED, 4 PARTIAL, 3 SUCCESS). Experiment: both analytics passes drop result-matching | 1.000 / 0.922 / 0.960 | 31/32 (0.969) | 20/32 | Reverted: case_04 loses `analytics_901` (more candidates, nothing forced); test unchanged; two-sided still assigns 0 |
+| 17 | Test-side leak audit + stable user_id | `code/tools/leak_audit.py` (every flag and silent rejection by type, test vs samples) and `code/tools/invariants.py` (citation, shared resources, account verification, audit-record retention, per-system shares). One generic fix: the staleness gate no longer rejects a candidate matched on the subject's own `user_id`, which is never reassigned (the gate exists for recycled emails and phones, the case_17 decoy) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (1 test row: case_34 gains VERIFY_RECORD_PRESENT `audit_record_3753`) |
 
 ### Notes per iteration
 
@@ -121,7 +122,9 @@ The added steps are the evidence-citing verifications that a COMPLETE case carri
 | Two-sided analytics | 0 assigned | 0 assigned (471 requests: no row is forced on both sides) |
 | Rows changed | 0 | 0 (deterministic and replay `output.csv` byte-identical to before) |
 
-The 5 contested sample accounts stay unassigned because the data does not force them: each case keeps 3 to 4 feasible rows (for example case_28 and case_29 share `account_5482` and `account_7012`, alongside `account_5715` and `account_9862`, which no request in either file claims). Rows of people outside the dataset are exactly what a forced-only rule must not resolve. Two-sided analytics with result-matching assigns nothing anywhere, so it failed the bar (at least 2 sample analytics rows gained) and the one-sided analytics pass stays fallback-only, with the two-sided pass alongside it.
+The 5 contested sample accounts stay unassigned because the data does not force them: each case keeps 3 to 4 feasible rows (for example case_28 and case_29 share `account_5482` and `account_7012`, alongside `account_5715` and `account_9862`, which no request in either file claims). Rows of people outside the dataset are exactly what a forced-only rule must not resolve. Two-sided analytics with result-matching assigns nothing anywhere, so it failed the bar (at least 2 sample analytics rows gained) and the one-sided analytics pass stays fallback-only. The two-sided pass is kept as `pipeline.TWO_SIDED_ANALYTICS` for the order check, not in `JOINT_PASSES`.
+
+**Failure found while measuring (fixed):** wiring the inert two-sided pass in, and rewording `joint_none` reasons, changed the case flags that the skeptic's `case_context` tool shows. Its cache keys include that text, so replay of the sample skeptic missed (3 ERROR outcomes, then the circuit breaker) even though no output row changed. Restoring the flag text and unwiring the pass brought back 60 of 60 cached calls. Lesson: any change to flag or reason strings must be followed by a replay run, not only a deterministic one.
 
 ### Iteration 16: analytics result-match (reverted)
 
@@ -134,6 +137,36 @@ The assumption behind result-matching holds for accounts and fails for analytics
 | PARTIALLY_COMPLETE | 0 | 69 | 1 | 23 | 3 | 3 |
 
 So `reported_status` summarizes the account step only. Dropping result-matching for analytics is still the wrong move for a forced-only rule, because it only widens each request's candidate set: the one-sided fallback pass falls from 41 to 20 test assignments and loses the one correct sample pick (case_04 becomes the NOT_APPLICABLE fallback again), and the two-sided pass stays at 0. Result-matching on analytics is kept as a filter that happens to reduce candidates, and is documented as having no causal basis in the data. The 6 identifier-less sample analytics rows stay missed.
+
+### Iteration 17: test-side leak audit
+
+Deterministic run over all 550 requests, no gold (`code/.cache/runs/leak_audit.md`, `code/.cache/runs/invariants.md`). Leak = what the flag signals: recall (a step is likely missing) or precision (a step is likely wrong).
+
+| Type | Leak | Test (cases) | Samples | Reading |
+|---|---|---|---|---|
+| joint_none | recall | 983 (459) | 57 | No row forced to the request. Accounts: 139 test requests keep 2+ feasible rows. This is the largest test leak, see invariant 3 |
+| unknown_state | recall | 122 (117) | 5 | 116 are SECURITY_AUDIT_LOG records whose only evidence was captured after `audit_at`; all sit in INCOMPLETE cases and are verified with `""`, as gold does on samples (invariant 4: 0 violations) |
+| activity_pick_refused | recall if wrong | 87 (81) | 0 | Exclusivity refusals; spot-checked 12 of them in iteration 14, all correct |
+| post_audit_rejected | recall | 41 (27) | 0 | Checked: every first observation is a timestamped log line 1 to 210 days after `audit_at` (search entries reappearing after the audit). Correctly excluded; no parser time bug |
+| perception_drop | recall | 17 records | 0 | Records with no id-shaped value; the record-by-record screenshot review in 9b found no missed resource |
+| category_unknown_name | recall | 16 (11) | 1 | Screen titles; only case_45's 5 screenshot-only audit records (live mode categorizes them through the LLM fallback) and case_61's `object_19` stay without a category |
+| category_conflict | precision | 8 (8) | 0 | Every one is SUPPORT_MESSAGE (REDACT) vs SUPPORT_ATTACHMENT (DELETE) on one support id that has both a message and an attachment record. The tie is broken by name order. The samples never exercise it, so there is no measurable basis for a rule: left as is and documented |
+| staleness_rejected | recall | 2 (1) | 3 | case_34: `audit_record_3753` linked only by the subject's own `user_id`, 9 days before the request. Fixed (below); the 3 sample rejections are email matches and stay rejected |
+| fallback_no_provable_obligation, uncited, unproven_guard | recall / precision | 1, 1, 1 | 0 | case_61 `object_19` and case_46 `tombstone_17` have no fact at all; case_55's burden-of-proof finding was audited in iteration 10 |
+
+Invariants over the output:
+
+| Invariant | Violations |
+|---|---|
+| 1. FINDING and COMPLETE-verification evidence mentions the resource or is its covering snapshot | 0 |
+| 2. A resource in two subjects' steps is identifier-linked in both | 0 |
+| 3. Every INCOMPLETE case verifies the account | 98 test, 4 sample (all "no account attributed"). Gold has an account step in 32 of 32 sample cases; our test output has none in 144 of 507 deletion cases (28%), samples 5 of 31 |
+| 4. Every SECURITY_AUDIT_LOG obligation gets VERIFY_RECORD_PRESENT | 0 |
+| 5. Per-system share of cases with findings, test vs samples (0.5x to 2x) | none outside except identity_service (test 0.01 vs sample 0.03, one sample case) and marketing_platform (test only, below 0.01) |
+
+Invariant 3 is the measurable recall gap the samples understate: about 144 test cases are missing their account steps. Its root cause is accounts that no evidence forces (iteration 15). Assigning them anyway would mean breaking ties by time distance, which is ruled out.
+
+**Fix kept:** the staleness gate now spares a candidate matched on the subject's `user_id`. Samples unchanged, 1 test row changed (case_34 adds `VERIFY_RECORD_PRESENT security_service/audit_record_3753`, evidence `""`, because its only fact is captured before `audit_at` but the case is INCOMPLETE). Not fixed, with reasons: the support category conflicts (no basis), case_45 in deterministic mode (live output already correct), and the 98 missing accounts (not forced).
 
 ## Model and strategy comparison
 

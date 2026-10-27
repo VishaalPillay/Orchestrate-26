@@ -15,11 +15,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dotenv import load_dotenv  # noqa: E402
+
 from pcda import paths  # noqa: E402
 from pcda.cases import load_requests  # noqa: E402
 from pcda.identity import JointActivityAttribution  # noqa: E402
 from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import JOINT_PASSES, build_context  # noqa: E402
+from pcda.pipeline import JOINT_PASSES, TWO_SIDED_ANALYTICS, build_context  # noqa: E402
 
 SEEDS = (11, 2026, 90210)
 
@@ -33,10 +35,11 @@ def snapshot(j: JointActivityAttribution) -> tuple:
 
 
 def main() -> int:
+    load_dotenv(paths.ENV_FILE)  # the perception cache is keyed on PERCEPTION_MODEL
     ctx = build_context(RunMode.DETERMINISTIC)
     every = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
     ok = True
-    for event_type, system, fallback_only, opts in JOINT_PASSES:
+    for event_type, system, fallback_only, opts in (*JOINT_PASSES, TWO_SIDED_ANALYTICS):
         def build(cases):
             return JointActivityAttribution.build(
                 cases, ctx.closure, ctx.store, ctx.lineage,

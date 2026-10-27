@@ -291,3 +291,18 @@ def test_propagate_two_sided_needs_the_row_forced_too():
     out = propagate({"a": frozenset({"r1"}), "x": frozenset({"r2"})}, resource_of, subject_of,
                     eligible=frozenset({"a"}), two_sided=True)
     assert out.assigned == {"a": "an_1"}
+
+
+def test_staleness_gate_spares_a_match_on_the_stable_user_id(tmp_path):
+    from pcda.facts import FactStore
+
+    # Both observed long before requested_at: an email can be recycled, a user_id cannot.
+    store = FactStore([
+        _fact("f1", "audit_record_old", "2026-01-10T00:00:00Z", "2026-01-10T00:00:00Z", ident="user_1"),
+        _fact("f2", "account_old", "2026-01-10T00:00:00Z", "2026-01-10T00:00:00Z", ident="a@example.com"),
+    ])
+    accepted, rejected = ResourceAttribution.for_case_detailed(
+        CASE, "user_1", _closure_for(tmp_path), store, LineageGraph([])
+    )
+    assert [a.resource_id for a in accepted] == ["audit_record_old"]
+    assert [r.resource_id for r in rejected] == ["account_old"] and "stale" in rejected[0].reasons[-1]
