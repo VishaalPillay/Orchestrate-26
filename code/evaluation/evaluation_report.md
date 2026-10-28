@@ -7,7 +7,7 @@ python code/main.py --mode deterministic --split all
 python code/evaluation/score.py --diff
 ```
 
-Current (iteration 17): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
+Current (iteration 19): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
 
 Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` comes from `--mode live` and is reproduced byte for byte by `--mode replay` from `code/.cache/llm/`. Model stages: screenshot perception, LLM intake and the category fallback. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row and scores the same on samples.
 
@@ -39,6 +39,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 16 | Analytics without result-matching | Data check (`code/tools/status_result_check.py`, identifier-attributed resources only, no gold): account row results track `reported_status` in 252 of 253 cases with a row (every NOT_STARTED row is FAILED), analytics results do not (COMPLETE cases: 21 FAILED, 4 PARTIAL, 3 SUCCESS). Experiment: both analytics passes drop result-matching | 1.000 / 0.922 / 0.960 | 31/32 (0.969) | 20/32 | Reverted: case_04 loses `analytics_901` (more candidates, nothing forced); test unchanged; two-sided still assigns 0 |
 | 17 | Test-side leak audit + stable user_id | `code/tools/leak_audit.py` (every flag and silent rejection by type, test vs samples) and `code/tools/invariants.py` (citation, shared resources, account verification, audit-record retention, per-system shares). One generic fix: the staleness gate no longer rejects a candidate matched on the subject's own `user_id`, which is never reassigned (the gate exists for recycled emails and phones, the case_17 decoy) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (1 test row: case_34 gains VERIFY_RECORD_PRESENT `audit_record_3753`) |
 | 18 | Nearest-row tie-breaker (`activity_ranked`) | Experiment reversing "never break ties by time": for requests with no account, the feasible row nearest `reported_at`, one global pass (largest rank-1/rank-2 margin first, exclusivity kept), adding only the account VERIFY step (verdict changes asserted 0). Validation on forced picks (`code/tools/rank_validation.py`, no gold): rank 1 = forced pick 129/133 (0.970), but only 23 had 2+ feasible rows: 22/23 | 0.978 / 0.938 / 0.958 | 32/32 (1.000) | n/a | Reverted: F1 fell; 2 of 6 sample picks correct (cases 18, 32); test would gain 135 account steps, 0 verdict changes |
+| 19 | Support message vs attachment by content | 8 test support records whose names point to both SUPPORT_MESSAGE and SUPPORT_ATTACHMENT were decided by name order. Now `category.support_by_content`: shared order/agent context (rule_05) -> MESSAGE, else file attributes (rule_06) -> ATTACHMENT, neither -> MESSAGE (reversible) and flagged | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (2 test rows: case_131, case_179 REDACT -> DELETE; 0 verdict flips) |
 
 ### Notes per iteration
 
@@ -184,6 +185,24 @@ The bar was at least 90% agreement on cases whose answer is already known, then 
 | Margin of the one disagreement | 79 min (inside the agreeing range, so margin cannot gate it) |
 
 Applied to the 6 sample requests that end with no account, it picked 2 correctly (case_18 `account_5521`, case_32 `account_8858`). It missed case_23 (`account_9155` for gold `account_410`), swapped case_28 and case_29 (`account_7012` and `account_5482` are exactly each other's gold), and gave case_04 `account_5661` (gold `account_004` is in no participant file). Step P/R/F1 went 1.000/0.927/0.962 -> 0.978/0.938/0.958. On test it would add 135 VERIFY_RECORD_ABSENT steps with 0 verdict changes. The validation set overstates accuracy because 110 of its 133 cases had a single feasible row, so agreement there is automatic. The real contested cases have several rows close in time, and there the rule is near chance (2/6). Abstaining stays the decision.
+
+### Iteration 19: support message vs attachment by content
+
+All 8 conflicting records carry both kinds of evidence, so the rule had to cover "both signals" too (decision: attachment unless the conversation has shared context). Every one has a file record whose uploader is the subject, and a message-side record with no order, agent or other-party context:
+
+| Resource (case) | File signal | Message-side record | Before (name order) | After |
+|---|---|---|---|---|
+| support_9309 (119) | `attachment_pii_scan` file=delivery_confirmation_94.pdf | `support_ticket_read_completed`, no text | ATTACHMENT | ATTACHMENT |
+| support_2315 (131) | `ticket_attachments` file_name=delivery_confirmation_84.pdf | `support_records` excerpt "Customer supplied contact details for a delivery query." | MESSAGE | ATTACHMENT |
+| support_2283 (179) | `ticket_attachments` file_name | `support_records` excerpt "Customer contacted support about account access." | MESSAGE | ATTACHMENT |
+| support_5830 (227), support_3684 (275), support_3615 (431), support_3896 (527) | `ticket_attachments` file_name | service export `message_excerpt`, generic | ATTACHMENT | ATTACHMENT |
+| support_1370 (71) | `attachment_pii_scan` file=delivery_confirmation_12.pdf | `support_records` excerpt "Customer asked support to correct delivery details." | ATTACHMENT | ATTACHMENT |
+
+Test diff: case_131 and case_179 replace REPORT_EXPOSED_PII / REDACT_RECORD / VERIFY_RECORD_REDACTED with REPORT_REMAINING_RECORD / DELETE_RECORD / VERIFY_RECORD_ABSENT. No verdict changes. The samples have no such conflict and are unchanged. Each decision is flagged `category_content:<resource>:<category>:<signal>`.
+
+**Phantom-id search (read-only).** `audit_record_6645`, `audit_record_5569` and `account_004` appear in no participant file: text, SQL, JSON and log evidence, all 4 PDFs, the perception cache, and URL-encoded and escaped variants were all checked. They appear only in `sample_output.csv`. The near-misses are different ids (`account_6645`, `support_5569`, ticket `CS-5569`). There is no parser gap.
+
+**Linking keys.** Nothing but identifiers and time links a request to an activity row. `system_activity.csv` carries no trace, ticket, job, session, ip or request id; log `trace_id` / `requestId` values only group lines inside one file.
 
 ## Model and strategy comparison
 

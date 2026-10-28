@@ -285,6 +285,9 @@ class CategoryResolver:
             if decided is None:
                 seen.add(cat)
                 decided, decided_rank, source = cat, rank, f"rank{rank}:{name}"
+        if seen == _SUPPORT_PAIR:
+            # Name order is arbitrary here; the record content decides (iteration 19).
+            decided, source = support_by_content(facts_list)
         conflicts = tuple(sorted(seen - {decided})) if decided else ()
         # Containers below the deciding rank (replica tables, "ledger", "handover")
         # are expected to be unknown; only names that could have decided are reported.
@@ -321,7 +324,39 @@ class CategoryResolver:
         return answer if answer in ALLOWED else None  # UNKNOWN or off-list -> no category
 
 
-_EXAMPLE_SKIP: Final = frozenset({"src", "source_line", "id_fields", "pii_fields", "trace_id", "coverage", "is_vacuous"})
+_SUPPORT_PAIR: Final = frozenset({"SUPPORT_MESSAGE", "SUPPORT_ATTACHMENT"})
+# A file: what rule_06 ("attachment belongs only to the deletion subject") deletes.
+_FILE_KEYS: Final = frozenset({
+    "file", "file_name", "filename", "content_type", "mime_type", "size", "size_bytes",
+    "storage_path", "attachment", "document",
+})
+# Another party's context: what rule_05 ("shared customer, agent, or order context") retains.
+_SHARED_KEYS: Final = frozenset({"agent", "agent_id", "assigned_agent", "order", "order_id", "order_reference"})
+_TEXT_KEYS: Final = ("message_text", "message_excerpt", "body", "conversation")
+_SHARED_TEXT: Final = re.compile(r"\border\b|\bORD-\d+|\bagent\b", re.I)
+
+
+def support_by_content(facts: list[Fact]) -> tuple[str, str]:
+    """(category, source) for a support record whose names point to both message and attachment.
+
+    Shared context (an agent or order field, or conversation text naming an
+    order or agent) means rule_05: SUPPORT_MESSAGE, redact. Otherwise file
+    attributes mean rule_06: SUPPORT_ATTACHMENT, delete. Neither signal:
+    SUPPORT_MESSAGE, because deleting a possibly shared conversation cannot be
+    undone and redacting can.
+    """
+    records = [f.attrs for f in facts if not f.is_coverage]
+    shared = sorted({k for a in records for k in a if k in _SHARED_KEYS})
+    shared += [k for a in records for k in _TEXT_KEYS if _SHARED_TEXT.search(a.get(k, "") or "")]
+    if shared:
+        return "SUPPORT_MESSAGE", f"content:shared_context:{shared[0]}"
+    files = sorted({k for a in records for k in a if k in _FILE_KEYS})
+    if files:
+        return "SUPPORT_ATTACHMENT", f"content:file_attributes:{','.join(files)}"
+    return "SUPPORT_MESSAGE", "content:no_signal"
+
+
+_EXAMPLE_SKIP: Final =frozenset({"src", "source_line", "id_fields", "pii_fields", "trace_id", "coverage", "is_vacuous"})
 
 
 def _examples_by_name(facts: list[Fact]) -> dict[str, list[dict[str, str]]]:

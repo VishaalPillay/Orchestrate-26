@@ -129,6 +129,21 @@ def test_inferred_names_can_be_disabled_for_experiments(monkeypatch):
     assert resolver.resolve("contact_query_completed") is None
 
 
+def test_support_message_vs_attachment_is_decided_by_content_not_name_order():
+    resolver = CategoryResolver(None)
+    excerpt = fact("support_records", message_excerpt="Customer contacted support about account access.")
+    upload = fact("ticket_attachments", file_name="delivery_confirmation_10.pdf", uploaded_by="a@b.co")
+    res = resolver.resolve_resource([excerpt, upload])
+    assert res.category == "SUPPORT_ATTACHMENT" and res.source == "content:file_attributes:file_name"
+    # Conversation text that names an order is shared context (rule_05): redact, even with a file.
+    shared = fact("support_records", message_excerpt="The affected order includes: Running shoes.")
+    assert resolver.resolve_resource([shared, upload]).category == "SUPPORT_MESSAGE"
+    # Neither signal: the reversible treatment.
+    bare = fact("ticket_attachments", uploaded_by="a@b.co")
+    res = resolver.resolve_resource([fact("support_records"), bare])
+    assert (res.category, res.source) == ("SUPPORT_MESSAGE", "content:no_signal")
+
+
 def test_non_negating_llm_span_leaves_rules_in_charge():
     """Sample case_28: 'Can you verify that my account was deleted?' is a deletion audit, not a refusal."""
     d = decide_intake(rule(True), llm(False, "NON_DELETION", "Can you verify that my account was deleted?"), ())

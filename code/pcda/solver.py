@@ -229,6 +229,8 @@ def solve(
             flags.append(f"category_llm:{res.resource_id}:{cat.source[4:]}->{cat.category}")
         if cat.conflicts:
             flags.append(f"category_conflict:{res.resource_id}:{cat.category} vs {'|'.join(cat.conflicts)}")
+        if cat.source.startswith("content:"):
+            flags.append(f"category_content:{res.resource_id}:{cat.category}:{cat.source[8:]}")
         if cat.category is None:
             flags.append(f"category_unknown:{res.resource_id}")
             continue
