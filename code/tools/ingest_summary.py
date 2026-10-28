@@ -15,11 +15,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pcda.agents.perception import RawObservation  # noqa: E402
-from pcda.facts import FactKind  # noqa: E402
-from pcda.ingest.base import IngestReport, ManifestRow, read_manifest  # noqa: E402
-from pcda.ingest.registry import build_adapters, ingest_all  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
+from pcda.agents.perception import RawObservation
+from pcda.facts import FactKind
+from pcda.ingest.base import IngestReport, ManifestRow, read_manifest
+from pcda.ingest.registry import build_adapters, ingest_all
+from pcda.llm.client import RunMode
 
 
 class _NoPerception:

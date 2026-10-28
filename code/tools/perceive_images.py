@@ -19,18 +19,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.agents.perception import LLMPerceptionAgent  # noqa: E402
-from pcda.facts import FactKind  # noqa: E402
-from pcda.ingest.base import IngestReport, read_manifest  # noqa: E402
-from pcda.ingest.image_adapter import ImageAdapter  # noqa: E402
-from pcda.ingest.registry import build_adapters, ingest_all  # noqa: E402
-from pcda.lineage import LineageGraph, resource_prefix  # noqa: E402
-from pcda.llm.cache import DiskCache  # noqa: E402
-from pcda.llm.client import RunMode, build_client  # noqa: E402
-from pcda.llm.ledger import TokenLedger  # noqa: E402
+from pcda import paths
+from pcda.agents.perception import LLMPerceptionAgent
+from pcda.facts import FactKind
+from pcda.ingest.base import IngestReport, read_manifest
+from pcda.ingest.image_adapter import ImageAdapter
+from pcda.ingest.registry import build_adapters, ingest_all
+from pcda.lineage import LineageGraph, resource_prefix
+from pcda.llm.cache import DiskCache
+from pcda.llm.client import RunMode, build_client
+from pcda.llm.ledger import TokenLedger
 
 
 def main() -> int:

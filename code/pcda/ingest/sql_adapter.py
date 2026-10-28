@@ -141,7 +141,7 @@ class SqlAdapter:
         cursor = conn.execute(f'SELECT rowid, * FROM "{table}" ORDER BY resource_id, rowid')
         systems_seen: set[str] = set()
         for rowid, *values in cursor:
-            record = dict(zip(columns, values))
+            record = dict(zip(columns, values, strict=True))
             system = record.get("origin_system") or TABLE_SYSTEM.get(table)
             if system is None:
                 em.warn(f"table {table} has no known owning system")

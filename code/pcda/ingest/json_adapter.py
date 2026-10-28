@@ -22,10 +22,11 @@ snapshot captured_at). A file can carry records later than its capture time
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from pcda.category import CATEGORIES, DATA_FLOW
 from pcda.facts import (

@@ -27,16 +27,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ingest_summary import _NoPerception  # noqa: E402
+from ingest_summary import _NoPerception
 
-from pcda import paths  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.facts import FactStore  # noqa: E402
-from pcda.identity import IdentityClosure, ResourceAttribution  # noqa: E402
-from pcda.ingest.base import IngestReport, read_manifest  # noqa: E402
-from pcda.ingest.registry import build_adapters, ingest_all  # noqa: E402
-from pcda.lineage import LineageGraph  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
+from pcda import paths
+from pcda.cases import load_requests
+from pcda.facts import FactStore
+from pcda.identity import IdentityClosure, ResourceAttribution
+from pcda.ingest.base import IngestReport, read_manifest
+from pcda.ingest.registry import build_adapters, ingest_all
+from pcda.lineage import LineageGraph
+from pcda.llm.client import RunMode
 
 DECOYS = {"case_17": {"account_6523"}}
 
@@ -99,7 +99,7 @@ def main() -> int:
     post_audit_owned: list[str] = []
     for case in load_requests(paths.SAMPLE_REQUESTS):
         user = closure.subject_of(case.email)
-        store = full.as_of(case.audit_at)
+        full.as_of(case.audit_at)
         attributed, stale = (
             ResourceAttribution.for_case_detailed(case, user, closure, full, lineage) if user else ([], [])
         )

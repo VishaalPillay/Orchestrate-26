@@ -21,11 +21,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.identity import (  # noqa: E402
+from pcda import paths
+from pcda.cases import load_requests
+from pcda.identity import (
     ACCOUNT_SYSTEM,
     REPORTED_STATUS_RESULT,
     LinkTier,
@@ -33,8 +33,8 @@ from pcda.identity import (  # noqa: E402
     conflicting_owner,
     normalize_email,
 )
-from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import build_context  # noqa: E402
+from pcda.llm.client import RunMode
+from pcda.pipeline import build_context
 
 GAP_BINS = ((0, 15, "<=15 min"), (15, 60, "15-60 min"), (60, 180, "1-3 h"), (180, 10**9, ">3 h"))
 
@@ -60,9 +60,13 @@ def main() -> int:
         for a in accs:
             if a.tier < LinkTier.ACTIVITY_TEMPORAL:
                 strong[a.resource_id].add(user)
-        if accs and all(a.tier == LinkTier.ACTIVITY_TEMPORAL for a in accs) and case.case_id not in joint.refused_holds:
-            if accs[0].resource_id not in ctx.shared_picks:
-                temporal[case.case_id] = accs[0].resource_id
+        if (
+            accs
+            and all(a.tier == LinkTier.ACTIVITY_TEMPORAL for a in accs)
+            and case.case_id not in joint.refused_holds
+            and accs[0].resource_id not in ctx.shared_picks
+        ):
+            temporal[case.case_id] = accs[0].resource_id
     forced = {cid: ("temporal", rid) for cid, rid in temporal.items()}
     forced |= {cid: ("joint", a.resource_id) for cid, a in joint.assigned.items() if a.resource_id not in ctx.shared_picks}
 
@@ -93,7 +97,7 @@ def main() -> int:
         hit = ranked[0].resource_id == pick
         agree[(tier, split)] += hit
         gap = abs((next(c for c in ranked if c.resource_id == pick).event_time - case.reported_at).total_seconds()) / 60
-        label = next(l for lo, hi, l in GAP_BINS if lo <= gap < hi)
+        label = next(name for lo, hi, name in GAP_BINS if lo <= gap < hi)
         by_gap[(tier, label, hit)] += 1
         if len(ranked) > 1:
             d1 = abs((ranked[0].event_time - case.reported_at).total_seconds()) / 60
@@ -108,7 +112,8 @@ def main() -> int:
         n = sum(v for (t, _), v in total.items() if t == tier)
         a = sum(v for (t, _), v in agree.items() if t == tier)
         print(f"  {tier} overall {a}/{n} = {a / n:.3f}; pick not in its own feasible set: {not_feasible[tier]}")
-    n = sum(total.values()); a = sum(agree.values())
+    n = sum(total.values())
+    a = sum(agree.values())
     print(f"  ALL {a}/{n} = {a / n:.3f}")
     print("by gap of the forced pick from reported_at (agree/total)")
     for tier in ("temporal", "joint"):
@@ -121,7 +126,9 @@ def main() -> int:
         for hit in (True, False):
             ms = sorted(m for m, h, t in margins if h == hit and t == tier)
             if ms:
-                q = lambda p: ms[min(len(ms) - 1, int(p * len(ms)))]  # noqa: E731
+                def q(p: float, ms: list[float] = ms) -> float:
+                    return ms[min(len(ms) - 1, int(p * len(ms)))]
+
                 print(f"  {tier:<9}{'agree' if hit else 'disagree':<9} n={len(ms):<4} min {ms[0]:.0f} p25 {q(.25):.0f} "
                       f"median {q(.5):.0f} p75 {q(.75):.0f} max {ms[-1]:.0f}")
     return 0

@@ -22,16 +22,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.agents.skeptic import Answer, Budget, LLMSkepticAgent, Target  # noqa: E402
-from pcda.agents.skeptic_gate import evaluate  # noqa: E402
-from pcda.agents.skeptic_gate import CHALLENGEABLE  # noqa: E402
-from pcda.agents.skeptic_tools import SkepticWorld  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import build_context, run_case  # noqa: E402
+from pcda import paths
+from pcda.agents.skeptic import Answer, Budget, LLMSkepticAgent, Target
+from pcda.agents.skeptic_gate import (
+    CHALLENGEABLE,
+    evaluate,
+)
+from pcda.agents.skeptic_tools import SkepticWorld
+from pcda.cases import load_requests
+from pcda.llm.client import RunMode
+from pcda.pipeline import build_context, run_case
 
 
 def main() -> int:

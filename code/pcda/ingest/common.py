@@ -11,10 +11,10 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
-from typing import Final, Iterable, Mapping
-
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Final
 
 from pcda.facts import (
     ATTR_ID_FIELDS,

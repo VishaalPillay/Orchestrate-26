@@ -9,8 +9,7 @@ from pcda.facts import ATTR_STATE, FactKind, FactStore
 from pcda.ingest.base import IngestReport, ManifestRow, SkippedEvidence
 from pcda.ingest.image_adapter import ImageAdapter
 from pcda.ingest.json_adapter import JsonAdapter
-from pcda.ingest.log_adapter import LogStyle, detect_style, parse_line
-from pcda.ingest.log_adapter import LogAdapter
+from pcda.ingest.log_adapter import LogAdapter, LogStyle, detect_style, parse_line
 from pcda.ingest.txt_adapter import TxtAdapter
 from pcda.llm.client import RunMode
 

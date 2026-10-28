@@ -21,7 +21,7 @@ the manifest origin. Per document:
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -34,7 +34,7 @@ from pcda.llm.client import RunMode
 _MONTHS: Final = {
     m: i
     for i, m in enumerate(
-        "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(), start=1
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1
     )
 }
 _DATE: Final = (
@@ -71,7 +71,7 @@ def is_text_usable(text: str) -> bool:
 
 def _iso(day: str, month: str, year: str, hour: str | None, minute: str | None) -> str:
     dt = datetime(
-        int(year), _MONTHS[month], int(day), int(hour or 0), int(minute or 0), tzinfo=timezone.utc
+        int(year), _MONTHS[month], int(day), int(hour or 0), int(minute or 0), tzinfo=UTC
     )
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -85,10 +85,10 @@ def _person_name(text: str) -> bool:
     """A name line: 'Customer First Last', or a capitalised line right before an email."""
     if re.search(r"^Customer [A-Z][a-z]+(?: [A-Z][a-z'\-]+)+$", text, re.M):
         return True
-    lines = [l.strip() for l in text.splitlines()]
+    lines = [raw.strip() for raw in text.splitlines()]
     for i, line in enumerate(lines):
         if _EMAIL.search(line) and i > 0:
-            prev = next((l for l in reversed(lines[:i]) if l not in _LABELS), "")
+            prev = next((p for p in reversed(lines[:i]) if p not in _LABELS), "")
             if _NAME_LINE.match(prev):
                 return True
     return False
@@ -110,7 +110,7 @@ class PdfAdapter:
         em = Emitter(row, self._report, src="document")
         for label in ("captured", "issued", "generated"):
             em.check_capture(_labelled_date(label, text), f"'{label}' stamp")
-        title = next((l.strip() for l in text.splitlines() if l.strip()), "pdf")
+        title = next((raw.strip() for raw in text.splitlines() if raw.strip()), "pdf")
         base: dict[str, object] = {
             "title": title,
             "recorded_at": _labelled_date("recorded", text),

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 PROMPTS_FILE = Path(__file__).with_name("prompts.md")
 
 
-@lru_cache(maxsize=None)
+@cache
 def load(task: str) -> tuple[str, str]:
     """(system, user) for one `## task` section."""
     text = PROMPTS_FILE.read_text(encoding="utf-8")

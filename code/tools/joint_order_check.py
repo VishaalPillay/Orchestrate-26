@@ -15,13 +15,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.identity import JointActivityAttribution  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import JOINT_PASSES, TWO_SIDED_ANALYTICS, build_context  # noqa: E402
+from pcda import paths
+from pcda.cases import load_requests
+from pcda.identity import JointActivityAttribution
+from pcda.llm.client import RunMode
+from pcda.pipeline import JOINT_PASSES, build_context
 
 SEEDS = (11, 2026, 90210)
 
@@ -39,14 +39,14 @@ def main() -> int:
     ctx = build_context(RunMode.DETERMINISTIC)
     every = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
     ok = True
-    for event_type, system, fallback_only, opts in (*JOINT_PASSES, TWO_SIDED_ANALYTICS):
-        def build(cases):
+    for event_type, system, fallback_only in JOINT_PASSES:
+        def build(cases: list, event_type: str = event_type, system: str = system) -> JointActivityAttribution:
             return JointActivityAttribution.build(
-                cases, ctx.closure, ctx.store, ctx.lineage,
-                event_type=event_type, target_system=system, **opts,
+                cases, ctx.closure, ctx.store, ctx.lineage, event_type=event_type, target_system=system
             )
         base = snapshot(build(every))
-        print(f"{system} {opts or 'one-sided'}{' (fallback only)' if fallback_only else ''}: assigned {len(base[0])}, rejected {len(base[1])}, refused holds {len(base[2])}")
+        print(f"{system}{' (fallback only)' if fallback_only else ''}: assigned {len(base[0])}, "
+              f"rejected {len(base[1])}, refused holds {len(base[2])}")
         for seed in SEEDS:
             order = every[:]
             random.Random(seed).shuffle(order)

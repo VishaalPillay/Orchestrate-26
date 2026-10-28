@@ -153,7 +153,7 @@ def test_case17_decoy_is_stale_and_real_account_is_attributed():
     assert {"account_4092", "backup_3245", "audit_record_1797"} <= set(ids)
     assert "account_6523" not in ids
     assert "account_6523" in {a.resource_id for a in stale}
-    assert "stale" in [a for a in stale if a.resource_id == "account_6523"][0].reasons[-1]
+    assert "stale" in next(a for a in stale if a.resource_id == "account_6523").reasons[-1]
     assert ids["account_4092"].tier is LinkTier.LOG_TRACE
 
 
@@ -270,27 +270,14 @@ def test_propagate_is_order_independent_and_refuses_contradictions():
     cands = {"a": frozenset({"r1"}), "b": frozenset({"r1", "r2"}), "c": frozenset({"r3"}), "d": frozenset({"r3"})}
     results = set()
     for order in (["a", "b", "c", "d"], ["d", "c", "b", "a"], ["b", "d", "a", "c"]):
-        out = propagate({k: cands[k] for k in order}, resource_of, subject_of, eligible=frozenset(cands), two_sided=False)
+        out = propagate({k: cands[k] for k in order}, resource_of, subject_of)
         results.add((tuple(out.assigned.items()), tuple(out.refused.items())))
     assert len(results) == 1
-    out = propagate(cands, resource_of, subject_of, eligible=frozenset(cands), two_sided=False)
+    out = propagate(cands, resource_of, subject_of)
     # a is forced to acc_1, which leaves b with acc_2; c and d contradict each other on acc_3.
     assert out.assigned == {"a": "acc_1", "b": "acc_2"}
     assert set(out.refused) == {"c", "d"} and "also the only candidate" in out.refused["c"]
 
-
-def test_propagate_two_sided_needs_the_row_forced_too():
-    from pcda.identity import propagate
-
-    resource_of = {"r1": "an_1", "r2": "an_2"}
-    subject_of = {"a": "user_a", "b": "user_b", "x": "user_x"}
-    # b wants an_1 and an_2, so an_1 is not forced to a; x competes but is not eligible.
-    cands = {"a": frozenset({"r1"}), "b": frozenset({"r1", "r2"}), "x": frozenset({"r2"})}
-    out = propagate(cands, resource_of, subject_of, eligible=frozenset({"a", "b"}), two_sided=True)
-    assert out.assigned == {}
-    out = propagate({"a": frozenset({"r1"}), "x": frozenset({"r2"})}, resource_of, subject_of,
-                    eligible=frozenset({"a"}), two_sided=True)
-    assert out.assigned == {"a": "an_1"}
 
 
 def test_staleness_gate_spares_a_match_on_the_stable_user_id(tmp_path):

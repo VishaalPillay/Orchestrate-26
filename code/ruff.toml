@@ -1,0 +1,20 @@
+# Lint configuration for the PCDA solution (run: python -m ruff check code).
+target-version = "py311"
+line-length = 130
+
+[lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify, ruff-specific.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",    # long lines: tables of literal expectations read better unwrapped
+    "RUF001",  # ambiguous unicode in strings: evidence text is multilingual
+    "RUF002",
+    "RUF003",
+    "UP042",   # str+Enum -> StrEnum changes str() of members, which reaches serialized output
+    "RUF005",  # tuple/list concatenation vs unpacking: style only
+]
+
+[lint.per-file-ignores]
+# Scripts put code/ on sys.path before importing pcda.
+"tools/*.py" = ["E402"]
+"evaluation/*.py" = ["E402"]

@@ -177,7 +177,7 @@ def test_case17_trace_joins_identifier_to_resource(write_evidence, manifest_row,
     assert "darwish.omar@icloud.com" not in absence[0].identifiers
     assert {f.resource_id for f in store.by_identifier("leonie.g9352@outlook.com")} == {"account_4092"}
     # The other account lookup in the same file keeps its own correlation_key.
-    other = [f for f in store.by_resource("account_4745") if f.kind is FactKind.ABSENCE][0]
+    other = next(f for f in store.by_resource("account_4745") if f.kind is FactKind.ABSENCE)
     assert other.identifiers == frozenset({"lucia-torres@gmail.com"})
 
 

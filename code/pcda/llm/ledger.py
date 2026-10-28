@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -35,7 +35,7 @@ class TokenLedger:
     def _append(self, row: dict[str, object]) -> None:
         if self._run_log is None:
             return
-        row = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **row}
+        row = {"ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), **row}
         self._run_log.parent.mkdir(parents=True, exist_ok=True)
         with self._run_log.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")

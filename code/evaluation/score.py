@@ -30,8 +30,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pcda import paths  # noqa: E402
-from pcda.contract import STEP_FIELDS  # noqa: E402
+from pcda import paths
+from pcda.contract import STEP_FIELDS
 
 KEY_FIELDS = ("phase", "system_id", "resource_id", "operation", "state")
 

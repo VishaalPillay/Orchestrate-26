@@ -23,14 +23,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 CODE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_DIR))
 
-from pcda import paths  # noqa: E402
+from pcda import paths
 
 Step = tuple[str, str, str, str, str, str]  # phase, system_id, resource_id, operation, state, evidence_id
 
@@ -59,7 +59,7 @@ class CustomResult:
     @property
     def expected_rows(self) -> list[dict]:
         keys = ("phase", "system_id", "resource_id", "operation", "state", "evidence_id")
-        return [dict(zip(keys, s), step_no=i) for i, s in enumerate(self.case.expected_steps, start=1)]
+        return [dict(zip(keys, s, strict=True), step_no=i) for i, s in enumerate(self.case.expected_steps, start=1)]
 
     @property
     def passed(self) -> bool:
@@ -135,8 +135,8 @@ def m_replica_drift(root: Path) -> None:
     # evidence_05 holds search_1007 in both the primary and the read replica; drop the primary row.
     sql = _evidence_path(root, "evidence_05")
     lines = sql.read_text(encoding="utf-8").splitlines(keepends=True)
-    primary = [i for i, l in enumerate(lines)
-               if l.startswith("INSERT INTO \"customer_data_primary\" VALUES('search_1007',")]
+    primary = [i for i, line in enumerate(lines)
+               if line.startswith("INSERT INTO \"customer_data_primary\" VALUES('search_1007',")]
     assert len(primary) == 1
     del lines[primary[0]]
     sql.write_text("".join(lines), encoding="utf-8")

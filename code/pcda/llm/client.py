@@ -199,9 +199,9 @@ class OpenAICompatProvider:
         except openai.APIStatusError as exc:
             retry_after = _retry_after(exc.response.headers if exc.response is not None else {})
             retryable = exc.status_code == 429 or exc.status_code >= 500
-            raise ProviderError(self.name, self._redact(f"HTTP {exc.status_code}: {exc.message}"), retryable, retry_after)
+            raise ProviderError(self.name, self._redact(f"HTTP {exc.status_code}: {exc.message}"), retryable, retry_after) from exc
         except (openai.APIConnectionError, openai.APITimeoutError) as exc:
-            raise ProviderError(self.name, self._redact(f"{type(exc).__name__}: {exc}"), True, None)
+            raise ProviderError(self.name, self._redact(f"{type(exc).__name__}: {exc}"), True, None) from exc
 
     def chat(self, model: str, messages: list[dict[str, Any]], json_mode: bool) -> tuple[str, int, int]:
         kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": 0}

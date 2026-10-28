@@ -7,11 +7,11 @@ Fact are already normalized (see identity.normalize_identifier).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Iterable, Iterator, Mapping
 
 
 class FactKind(str, Enum):
@@ -40,8 +40,8 @@ def parse_ts(value: str) -> datetime:
     """Parse an ISO-8601 timestamp (with 'Z' or offset) into an aware UTC datetime."""
     dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 @dataclass(frozen=True, eq=False)

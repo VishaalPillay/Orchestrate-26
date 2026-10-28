@@ -25,15 +25,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.facts import ATTR_LINKED, ATTR_VACUOUS  # noqa: E402
-from pcda.identity import LinkTier, normalize_email  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import build_context, run_case  # noqa: E402
-from pcda.solver import Verdict  # noqa: E402
+from pcda import paths
+from pcda.cases import load_requests
+from pcda.facts import ATTR_LINKED, ATTR_VACUOUS
+from pcda.identity import LinkTier, normalize_email
+from pcda.llm.client import RunMode
+from pcda.pipeline import build_context, run_case
+from pcda.solver import Verdict
 
 ACCOUNT = "account_service"
 
@@ -136,7 +136,7 @@ def main() -> int:
         flag = "" if s and 0.5 <= t / s <= 2 else ("test only" if not s else ("over" if t > 2 * s else "under"))
         lines.append(f"| {sys_id} | {t:.2f} | {s:.2f} | {g:.2f} | {flag} |")
     args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print("\n".join(l for l in lines if not l.startswith("- ")))
+    print("\n".join(line for line in lines if not line.startswith("- ")))
     for title, items in (("v1", v1), ("v2", v2), ("v3", v3), ("v4", v4)):
         for x in items[:6]:
             print(f"  {title}: {x}")

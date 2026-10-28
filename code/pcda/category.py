@@ -18,8 +18,9 @@ import json
 import os
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Final, Iterable
+from typing import Final
 
 from pcda.facts import ATTR_TABLE, Fact
 from pcda.lineage import Claim

@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Final, Mapping
+from typing import Final
 
 from pcda.category import CATEGORIES, DATA_FLOW
 from pcda.facts import (
@@ -154,7 +155,7 @@ def group_by_trace(lines: list[LogLine]) -> dict[str | None, list[LogLine]]:
     for line in lines:
         groups.setdefault(line.fields.get("trace_id"), []).append(line)
     for members in groups.values():
-        members.sort(key=lambda l: (l.timestamp, l.line_no))
+        members.sort(key=lambda m: (m.timestamp, m.line_no))
     return groups
 
 
@@ -303,7 +304,7 @@ class LogAdapter:
                     em.warn(f"line {line.line_no}: event {event!r} on {f['resource_id']} has no state")
                 continue
             rid = f["resource_id"]
-            context = [l.fields for l in lines if l.fields.get("resource_id") in (None, rid)]
+            context = [ln.fields for ln in lines if ln.fields.get("resource_id") in (None, rid)]
             content = view_record({k: f[k] for k in _CONTENT_KEYS if k in f})
             queried = view_record({k: c[k] for c in context for k in _QUERY_KEYS if k in c})
             joined = view_record(

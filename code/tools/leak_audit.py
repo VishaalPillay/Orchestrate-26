@@ -21,14 +21,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.identity import ResourceAttribution, normalize_email  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import build_context, run_case  # noqa: E402
-from pcda.solver import ObligationStatus  # noqa: E402
+from pcda import paths
+from pcda.cases import load_requests
+from pcda.identity import ResourceAttribution, normalize_email
+from pcda.llm.client import RunMode
+from pcda.pipeline import build_context, run_case
+from pcda.solver import ObligationStatus
 
 # Flag prefix -> (leak, what it means). Unlisted prefixes are reported as "info".
 LEAK: dict[str, tuple[str, str]] = {

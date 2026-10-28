@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pcda import paths  # noqa: E402
+from pcda import paths
 
 
 def report(split: str) -> None:

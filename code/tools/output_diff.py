@@ -56,7 +56,7 @@ def main() -> int:
     print(f"steps removed {sum(removed.values())}: " + ", ".join(f"{k} {v}" for k, v in removed.most_common()))
     print(f"steps added {sum(added.values())}: " + ", ".join(f"{k} {v}" for k, v in added.most_common()))
     for system in args.system:
-        kinds = Counter(l.split(f"{system} ")[1].split(":")[0] for l in lines if f"{system} " in l)
+        kinds = Counter(line.split(f"{system} ")[1].split(":")[0] for line in lines if f"{system} " in line)
         print(f"{system}: " + (", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) or "no change"))
     print("\n".join(lines))
     return 0

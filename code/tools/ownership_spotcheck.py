@@ -22,13 +22,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.identity import LinkTier, conflicting_owner  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import build_context, run_case  # noqa: E402
+from pcda import paths
+from pcda.cases import load_requests
+from pcda.identity import LinkTier, conflicting_owner
+from pcda.llm.client import RunMode
+from pcda.pipeline import build_context, run_case
 
 ACTIVITY_TIERS = (LinkTier.ACTIVITY_TEMPORAL, LinkTier.ACTIVITY_JOINT)
 
@@ -84,7 +84,7 @@ def main() -> int:
         subj_ids = ctx.closure.identifiers_of(subject)
         other_ids = ctx.closure.identifiers_of(other)
         checks = {
-            "fact resolves to a user": other is not None and None not in users or other is not None,
+            "fact resolves to a user": (other is not None and None not in users) or other is not None,
             "that user is not the subject": other != subject,
             "subject not among the fact's users": subject not in users,
             "subject and user share no identifier": not (subj_ids & other_ids),

@@ -521,24 +521,18 @@ def propagate(
     cands: dict[str, frozenset[str]],
     resource_of: dict[str, str],
     subject_of: dict[str, str],
-    *,
-    eligible: frozenset[str],
-    two_sided: bool,
 ) -> Propagation:
     """Forced assignment of activity rows to requests, to a fixpoint.
 
     `cands` maps each request to its feasible rows; `resource_of` maps a row to
     its resource. A request is forced when its feasible rows name exactly one
-    resource. In two-sided mode it must also be the only request that resource
-    is feasible for, so a request is never assumed to have a row at all. Each
-    round takes every forced request at once:
+    resource. Each round takes every forced request at once:
       * one subject forced to a resource takes it, and the resource leaves every
         other subject's request (a record belongs to one person);
       * two subjects forced to the same resource is a contradiction: both are
         refused, and the resource leaves everyone else too.
     Removals only shrink sets, and a round reads a snapshot of the sets, so the
-    result does not depend on the order of `cands`. Ties are never broken by
-    time. Requests outside `eligible` compete for rows but are never assigned.
+    result does not depend on the order of `cands`. Ties are never broken by time.
     """
     live = {cid: set(rows) for cid, rows in cands.items()}
     done: set[str] = set()
@@ -549,21 +543,11 @@ def propagate(
         return {resource_of[r] for r in live[cid]}
 
     while True:
-        wanted: dict[str, set[str]] = defaultdict(set)  # resource -> requests it is feasible for
-        for cid in live:
-            for rid in resources(cid):
-                wanted[rid].add(cid)
         forced: dict[str, set[str]] = defaultdict(set)  # resource -> requests forced to it
         for cid in sorted(live):
-            if cid in done or cid not in eligible:
-                continue
             res = resources(cid)
-            if len(res) != 1:
-                continue
-            (rid,) = res
-            if two_sided and wanted[rid] != {cid}:
-                continue
-            forced[rid].add(cid)
+            if cid not in done and len(res) == 1:
+                forced[next(iter(res))].add(cid)
         if not forced:
             break
         for rid, cids in sorted(forced.items()):
@@ -579,9 +563,43 @@ def propagate(
             for other in live:
                 if other not in cids and subject_of[other] not in keep:
                     live[other] = {r for r in live[other] if resource_of[r] != rid}
-    for cid in sorted(eligible - done):
+    for cid in sorted(set(live) - done):
         refused[cid] = f"{len(resources(cid))} candidate rows remain"
     return Propagation(dict(sorted(assigned.items())), dict(sorted(refused.items())))
+
+
+@dataclass
+class _Partition:
+    """Requests split by what identifier attribution already gives them on one system."""
+
+    strong: dict[str, set[str]]  # resource -> subjects holding it by identifiers
+    held: dict[str, AttributedResource]  # case_id -> activity_temporal pick
+    open_cases: dict[str, tuple[CaseRequest, str]]  # case_id -> (case, subject), nothing on the system
+    subject_of: dict[str, str]  # case_id -> subject, every resolved request
+
+
+def _partition(
+    cases: list[CaseRequest], closure: IdentityClosure, store: FactStore, lineage: LineageGraph, target_system: str
+) -> _Partition:
+    part = _Partition(defaultdict(set), {}, {}, {})
+    for case in cases:
+        user = closure.subject_of(case.email)
+        if user is None:
+            continue
+        part.subject_of[case.case_id] = user
+        found = [
+            a for a in ResourceAttribution.for_case(case, user, closure, store, lineage) if a.system_id == target_system
+        ]
+        for a in found:
+            if not a.needs_skeptic:
+                part.strong[a.resource_id].add(user)
+        if any(not a.needs_skeptic for a in found):
+            continue
+        if found:
+            part.held[case.case_id] = found[0]
+        else:
+            part.open_cases[case.case_id] = (case, user)
+    return part
 
 
 class JointActivityAttribution:
@@ -589,18 +607,14 @@ class JointActivityAttribution:
 
     Applies to a case with no identifier-based attribution on the target
     system. A row is feasible for a request when
-      (a) requested_at <= event_time <= min(reported_at, audit_at) (accounts) or
-          audit_at (`until_reported=False`);
-      (b) reported_result matches the case's reported_status (`match_result`);
+      (a) requested_at <= event_time <= min(reported_at, audit_at);
+      (b) reported_result matches the case's reported_status;
       (c) no ownership-eligible fact ties the resource to another user
           (`conflicting_owner`, the exclusivity rule);
       (d) the resource is not attributed by identifiers to another subject.
     activity_temporal picks are held as forced singletons. `propagate` then
     assigns over every request (sample and evaluation together, so the answer
-    for a case never depends on which split is run). Accounts are assigned when
-    the request side is forced; `two_sided` rows (analytics) only when the row
-    side is forced too, because a request need not have such a row and a row may
-    belong to someone outside the dataset.
+    for a case never depends on which split is run).
 
     Every result goes to the skeptic. Resource ids are taken from the rows,
     never inferred from naming patterns.
@@ -627,102 +641,68 @@ class JointActivityAttribution:
         *,
         event_type: str = "DELETE_RECORD",
         target_system: str = ACCOUNT_SYSTEM,
-        match_result: bool = True,
-        until_reported: bool = True,
-        two_sided: bool = False,
     ) -> JointActivityAttribution:
-        """Accounts use DELETE_RECORD on account_service; analytics rows ANONYMIZE_RECORD
-        on analytics_platform, two-sided."""
+        """Accounts use DELETE_RECORD on account_service; analytics rows ANONYMIZE_RECORD on analytics_platform."""
         rows = [
             c
             for c in lineage.claims
-            if c.source_system == "deletion_worker"
-            and c.event_type == event_type
-            and c.target_system == target_system
+            if c.source_system == "deletion_worker" and c.event_type == event_type and c.target_system == target_system
         ]
         claim_by_id = {c.activity_id: c for c in lineage.claims}
-
-        strong: dict[str, set[str]] = defaultdict(set)  # resource -> subjects holding it by identifiers
-        held: dict[str, AttributedResource] = {}  # case_id -> activity_temporal pick
-        open_cases: dict[str, tuple[CaseRequest, str]] = {}
-        closed: dict[str, tuple[CaseRequest, str]] = {}
-        for case in cases:
-            user = closure.subject_of(case.email)
-            if user is None:
-                continue
-            found = [
-                a
-                for a in ResourceAttribution.for_case(case, user, closure, store, lineage)
-                if a.system_id == target_system
-            ]
-            for a in found:
-                if not a.needs_skeptic:
-                    strong[a.resource_id].add(user)
-            if any(not a.needs_skeptic for a in found):
-                closed[case.case_id] = (case, user)
-            elif found:
-                held[case.case_id] = found[0]
-            else:
-                open_cases[case.case_id] = (case, user)
-
+        part = _partition(cases, closure, store, lineage, target_system)
         conflict_cache: dict[tuple[str, str], bool] = {}
 
         def owned_elsewhere(rid: str, user: str) -> bool:
-            if strong.get(rid, set()) - {user}:
+            if part.strong.get(rid, set()) - {user}:
                 return True
             if (rid, user) not in conflict_cache:
                 conflict_cache[rid, user] = conflicting_owner(rid, user, closure, store) is not None
             return conflict_cache[rid, user]
 
-        def feasible(case: CaseRequest, user: str) -> frozenset[str]:
-            until = min(case.reported_at, case.audit_at) if until_reported else case.audit_at
-            want = REPORTED_STATUS_RESULT.get(case.reported_status)
-            return frozenset(
-                c.activity_id
-                for c in rows
-                if case.requested_at <= c.event_time <= until
-                and (not match_result or c.reported_result == want)
-                and not owned_elsewhere(c.resource_id, user)
-            )
-
         resource_of = {c.activity_id: c.resource_id for c in rows}
-        subject_of: dict[str, str] = {}
         cands: dict[str, frozenset[str]] = {}
-        for cid, pick in held.items():
+        for cid, pick in part.held.items():
             ids = frozenset(e for e in pick.evidence_ids if e in claim_by_id)
             resource_of.update({e: pick.resource_id for e in ids})
             cands[cid] = ids
-        for cid, (case, user) in open_cases.items():
-            cands[cid] = feasible(case, user)
-        if two_sided:
-            # Requests that already hold such a resource by identifiers still compete for rows.
-            for cid, (case, user) in closed.items():
-                cands[cid] = feasible(case, user)
-        for case in cases:
-            user = closure.subject_of(case.email)
-            if user is not None:
-                subject_of[case.case_id] = user
+        for cid, (case, user) in part.open_cases.items():
+            until = min(case.reported_at, case.audit_at)
+            want = REPORTED_STATUS_RESULT.get(case.reported_status)
+            cands[cid] = frozenset(
+                c.activity_id
+                for c in rows
+                if case.requested_at <= c.event_time <= until
+                and c.reported_result == want
+                and not owned_elsewhere(c.resource_id, user)
+            )
+        result = propagate(cands, resource_of, part.subject_of)
+        refused_holds = {
+            cid: (part.held[cid].resource_id, result.refused[cid])
+            for cid in sorted(part.held)
+            if cid in result.refused and cands[cid]
+        }
+        assigned, rejected = cls._assignments(part, result, cands, resource_of, claim_by_id, event_type, target_system)
+        return cls(assigned, rejected, refused_holds)
 
-        result = propagate(
-            cands,
-            resource_of,
-            subject_of,
-            eligible=frozenset(held) | frozenset(open_cases),
-            two_sided=two_sided,
-        )
+    @staticmethod
+    def _assignments(
+        part: _Partition,
+        result: Propagation,
+        cands: dict[str, frozenset[str]],
+        resource_of: dict[str, str],
+        claim_by_id: dict[str, Claim],
+        event_type: str,
+        target_system: str,
+    ) -> tuple[dict[str, AttributedResource], dict[str, str]]:
+        """The assigned open requests as attributions, citing the latest feasible row; the rest with why."""
         assigned: dict[str, AttributedResource] = {}
         rejected: dict[str, str] = {}
-        refused_holds: dict[str, tuple[str, str]] = {}
-        for cid in sorted(held):
-            if cid in result.refused and cands[cid]:
-                refused_holds[cid] = (held[cid].resource_id, result.refused[cid])
-        for cid in sorted(open_cases):
+        for cid in sorted(part.open_cases):
             if cid not in result.assigned:
                 rejected[cid] = result.refused.get(cid, "no candidate rows")
                 continue
             rid = result.assigned[cid]
-            case = open_cases[cid][0]
-            # Cite the latest feasible row of the assigned resource.
+            case = part.open_cases[cid][0]
             c = max(
                 (claim_by_id[r] for r in cands[cid] if resource_of[r] == rid),
                 key=lambda c: (c.event_time, c.activity_id),
@@ -731,14 +711,13 @@ class JointActivityAttribution:
                 resource_id=rid,
                 system_id=target_system,
                 tier=LinkTier.ACTIVITY_JOINT,
+                # Wording unchanged since iteration 5: the skeptic's cache keys include it.
                 reasons=(
                     f"activity_joint: {c.activity_id} deletion_worker {event_type} {c.reported_result} "
-                    f"{(c.event_time - case.reported_at).total_seconds() / 60:+.1f} min from reported_at"
-                    + (f", consistent with reported_status {case.reported_status}" if match_result else "")
-                    # One-sided wording is unchanged from the greedy pass: the skeptic's cache keys include it.
-                    + ("; forced on both sides" if two_sided else "; sole remaining candidate"),
+                    f"{(c.event_time - case.reported_at).total_seconds() / 60:+.1f} min from reported_at, "
+                    f"consistent with reported_status {case.reported_status}; sole remaining candidate",
                 ),
                 evidence_ids=(c.activity_id,),
                 needs_skeptic=True,
             )
-        return cls(assigned, rejected, refused_holds)
+        return assigned, rejected

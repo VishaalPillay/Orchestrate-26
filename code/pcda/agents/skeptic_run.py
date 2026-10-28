@@ -24,7 +24,6 @@ from pcda.pipeline import CaseResult, Context, run_case
 from pcda.planner import Step
 
 
-
 @dataclass
 class SkepticRun:
     split: str
@@ -132,7 +131,7 @@ def blast_radius(before: list[CaseResult], after: list[CaseResult]) -> Blast:
     verdicts: list[tuple[str, str, str]] = []
     steps = 0
     changed: list[str] = []
-    for b, a in zip(before, after):
+    for b, a in zip(before, after, strict=True):
         cid = b.certificate.case_id
         assert cid == a.certificate.case_id
         added, removed = diff_steps(b.steps, a.steps)

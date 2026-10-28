@@ -36,10 +36,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import custom_cases  # noqa: E402
-from score import fmt, match  # noqa: E402
+import custom_cases
+from score import fmt, match
 
-from pcda import paths  # noqa: E402
+from pcda import paths
 
 FIELDS = ("phase", "system_id", "resource_id", "operation", "state", "evidence_id")
 REPORT = Path(__file__).resolve().parent / "evaluation_report.md"
@@ -252,7 +252,7 @@ def write_sections(metrics_md: str, custom_md: str) -> None:
     for title, body in (("## Metrics", metrics_md), ("## Custom evaluation cases", custom_md)):
         pattern = re.compile(rf"^{re.escape(title)}\n.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
         if pattern.search(text):
-            text = pattern.sub(lambda _: body.rstrip("\n") + "\n\n", text)
+            text = pattern.sub(lambda _, body=body: body.rstrip("\n") + "\n\n", text)
         else:
             text = text.rstrip("\n") + "\n\n" + body
     REPORT.write_text(text.rstrip("\n") + "\n", encoding="utf-8")

@@ -114,7 +114,7 @@ def test_tools_show_owners_never_raw_identifiers_and_only_store_content() -> Non
     assert json.loads(tools.call("nope", "{}"))["error"] == "unknown_tool"
     assert json.loads(tools.call("find_facts", "not json"))["error"] == "bad_arguments"
     cand = json.loads(tools.call("candidate_resources", '{"case_id": "case_1", "system_id": "account_service"}'))
-    assert [r["resource_id"] for r in cand["rows"]][0] == "account_900"  # nearest to reported_at first
+    assert next(r["resource_id"] for r in cand["rows"]) == "account_900"  # nearest to reported_at first
     assert "activity_1" in tools.seen
 
 
@@ -253,7 +253,7 @@ def test_submit_verdict_tool_ends_the_investigation_and_a_bad_one_is_resubmitted
         submit(verdict="MAYBE", reason="x"),
         submit(verdict="CHALLENGE", kind="OTHER_SUBJECT", resource_id="account_900", fact_id="evidence_1:00001", reason="x"),
     ]
-    live, provider = client(tmp_path, script)
+    live, _provider = client(tmp_path, script)
     inv = LLMSkepticAgent(live, base_world()).investigate(TARGET, Budget(10))
     assert inv.outcome == "CHALLENGE" and inv.calls == 2 and inv.gate is not None and inv.gate.accepted
 

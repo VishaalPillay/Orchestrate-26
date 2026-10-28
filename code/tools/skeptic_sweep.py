@@ -24,16 +24,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from pcda import paths  # noqa: E402
-from pcda.agents.skeptic import Adjustments, Answer, Target  # noqa: E402
-from pcda.agents.skeptic_run import blast_radius, diff_steps  # noqa: E402
-from pcda.agents.skeptic_gate import CHALLENGEABLE, evaluate  # noqa: E402
-from pcda.agents.skeptic_tools import SkepticWorld, fact_mentions  # noqa: E402
-from pcda.cases import load_requests  # noqa: E402
-from pcda.llm.client import RunMode  # noqa: E402
-from pcda.pipeline import build_context, run_case  # noqa: E402
+from pcda import paths
+from pcda.agents.skeptic import Adjustments, Answer, Target
+from pcda.agents.skeptic_gate import CHALLENGEABLE, evaluate
+from pcda.agents.skeptic_run import blast_radius, diff_steps
+from pcda.agents.skeptic_tools import SkepticWorld, fact_mentions
+from pcda.cases import load_requests
+from pcda.llm.client import RunMode
+from pcda.pipeline import build_context, run_case
 
 TOKEN = re.compile(r"(?<![A-Za-z0-9_])([a-z][a-z_]*\d+)(?![0-9])")
 
@@ -132,7 +132,7 @@ def main() -> int:
         print(f"{part}: applying every reachable removal changes {len(blast.verdict_changes)} verdict(s), "
               f"{blast.step_changes} step(s), {len(blast.cases_changed)} case(s)")
         shown = 0
-        for b, a in zip(before, after):
+        for b, a in zip(before, after, strict=True):
             added, removed = diff_steps(b.steps, a.steps)
             if (added or removed or b.certificate.verdict != a.certificate.verdict) and shown < 6:
                 shown += 1
@@ -149,7 +149,8 @@ def main() -> int:
             continue
         b, a = results[cid], after_by[cid]
         added, removed = diff_steps(b.steps, a.steps)
-        fmt = lambda st: f"{st.operation} {st.system_id}/{st.resource_id} ev={st.evidence_id or '-'}"
+        def fmt(st):
+            return f"{st.operation} {st.system_id}/{st.resource_id} ev={st.evidence_id or '-'}"
         for rid in sorted(removals[cid].remove):
             tier = next(x.tier.name for x in b.attributions if x.resource_id == rid)
             cited, check = cited_for[(cid, rid)]
