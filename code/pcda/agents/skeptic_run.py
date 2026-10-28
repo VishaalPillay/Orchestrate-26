@@ -15,7 +15,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pcda import paths
+from pcda import config, paths
 from pcda.agents.skeptic import Adjustments, Budget, Investigation, LLMSkepticAgent, run_queue
 from pcda.agents.skeptic_queue import build_queue
 from pcda.agents.skeptic_tools import SkepticWorld
@@ -23,7 +23,6 @@ from pcda.cases import CaseRequest, load_requests
 from pcda.pipeline import CaseResult, Context, run_case
 from pcda.planner import Step
 
-BUDGETS: dict[str, int] = {"sample": 60, "test": 120}
 
 
 @dataclass
@@ -56,7 +55,7 @@ class SkepticRun:
 def run_skeptic(
     ctx: Context, splits: dict[str, list[CaseRequest]], budgets: dict[str, int] | None = None
 ) -> dict[str, SkepticRun]:
-    budgets = {**BUDGETS, **(budgets or {})}
+    budgets = config.skeptic_budgets(budgets)
     every_case = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
     first_pass: dict[str, CaseResult] = {c.case_id: run_case(c, ctx, adjust=False) for c in every_case}
     world = SkepticWorld(

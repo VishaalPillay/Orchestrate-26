@@ -27,6 +27,7 @@ from pcda.solver import Certificate
 SKEPTIC_TASK: Final = "skeptic"
 SKEPTIC_MODEL_ENV: Final = "SKEPTIC_MODEL"
 MAX_CALLS_PER_TARGET: Final = 8
+MAX_GATE_RETRIES: Final = 2  # rejected claims returned to the agent before "no change"
 VERDICTS: Final = ("CONFIRM", "CHALLENGE", "PROPOSE")
 KINDS: Final = ("OTHER_SUBJECT", "OTHER_REQUEST", "MISSED_LINK")
 
@@ -102,6 +103,7 @@ class Investigation:
     models: list[str] = field(default_factory=list)
     tool_calls: int = 0
     cited_unseen: bool = False  # the cited id exists but no tool returned it
+    gate_retries: int = 0  # rejections returned to the agent
     outcome: str = ""  # CONFIRM | CHALLENGE | PROPOSE | NO_ANSWER | UNFINISHED | ERROR
 
     def record(self) -> dict[str, Any]:
@@ -126,6 +128,7 @@ class Investigation:
                 "reject_reason": g.reject_reason, "hallucinated": g.hallucinated,
             },
             "cited_unseen": self.cited_unseen,
+            "gate_retries": self.gate_retries,
             "calls": self.calls,
             "cached_calls": self.cached_calls,
             "tool_calls": self.tool_calls,
@@ -229,9 +232,38 @@ class LLMSkepticAgent:
             inv.gate = evaluate(answer, target, world)
             if answer.fact_id and not inv.gate.hallucinated and answer.fact_id not in tools.seen:
                 inv.cited_unseen = True
+            if answer.verdict != "CONFIRM" and not inv.gate.accepted and inv.gate_retries < MAX_GATE_RETRIES and not last:
+                # Tell the agent which check failed and let it revise; a CONFIRM never reaches here,
+                # so recorded CONFIRM conversations replay unchanged.
+                inv.gate_retries += 1
+                feedback = gate_feedback(inv.gate, MAX_GATE_RETRIES - inv.gate_retries)
+                if submitted:
+                    for c in calls:
+                        content = feedback if c is submitted[0] else '{"error":"ignored: a verdict was submitted"}'
+                        messages.append({"role": "tool", "tool_call_id": c["id"], "content": content})
+                else:
+                    messages.append({"role": "user", "content": feedback})
+                continue
+            # Accepted, a CONFIRM, or out of retries: a rejected claim changes nothing.
             return inv
         inv.outcome = "NO_ANSWER"
         return inv
+
+
+def gate_feedback(gate: GateResult, retries_left: int) -> str:
+    """The gate's structured rejection, returned to the agent as a tool result."""
+    return json.dumps(
+        {
+            "gate": "rejected",
+            "failed_check": gate.reject_reason,
+            "passed_checks": list(gate.checks),
+            "cited": gate.cited,
+            "hallucinated": gate.hallucinated,
+            "retries_left": retries_left,
+            "next": "cite an id that passes the failed check, or submit_verdict CONFIRM",
+        },
+        sort_keys=True,
+    )
 
 
 def _describe(t: Target) -> str:

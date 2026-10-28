@@ -196,6 +196,7 @@ class ScriptedProvider:
     def __init__(self, script: list[dict[str, Any]]) -> None:
         self.script = list(script)
         self.calls = 0
+        self.seen: list[list[dict[str, Any]]] = []  # the messages of each call
 
     def model_for(self, request: Any) -> str:
         return "scripted-model"
@@ -205,6 +206,7 @@ class ScriptedProvider:
 
     def chat_tools(self, model: str, messages: Any, tools: Any) -> Any:
         self.calls += 1
+        self.seen.append(json.loads(json.dumps(messages)))
         return self.script.pop(0), 10, 5
 
 
@@ -281,6 +283,54 @@ def test_budget_stops_mid_target_and_discards_it(tmp_path: Any, monkeypatch: Any
     agent = LLMSkepticAgent(live, base_world())
     adjustments, done, unreached = run_queue(agent, [TARGET, Target("case_1", "PICK", "account_55", 3, 1.0, "t")], Budget(1))
     assert provider.calls == 1 and done[0].outcome == "UNFINISHED" and not adjustments and unreached == 2
+
+
+def test_a_gate_rejection_is_returned_to_the_agent_which_may_revise(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.setenv("SKEPTIC_MODEL", "scripted-model")
+    # evidence_3 is the subject's own fact: OTHER_SUBJECT fails; the revised claim cites evidence_1 (user_2).
+    script = [
+        submit(verdict="CHALLENGE", kind="OTHER_SUBJECT", resource_id="account_900", fact_id="evidence_3:00001", reason="x"),
+        submit(verdict="CHALLENGE", kind="OTHER_SUBJECT", resource_id="account_900", fact_id="evidence_1:00001", reason="y"),
+    ]
+    live, provider = client(tmp_path, script)
+    agent = LLMSkepticAgent(live, base_world())
+    inv = agent.investigate(TARGET, Budget(10))
+    assert provider.calls == 2 and inv.gate_retries == 1
+    assert inv.gate is not None and inv.gate.accepted and inv.answer is not None and inv.answer.reason == "y"
+    # The second call saw the structured rejection as the submit_verdict tool result.
+    second = provider.seen[1]
+    feedback = json.loads(next(m["content"] for m in second if m.get("role") == "tool"))
+    assert feedback["gate"] == "rejected" and feedback["failed_check"] == "fact_does_not_link_resource"
+    assert feedback["passed_checks"] == ["cited_id_exists", "resource_is_activity_pick"] and feedback["retries_left"] == 1
+
+
+def test_after_two_rejected_retries_the_claim_falls_back_to_no_change(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.setenv("SKEPTIC_MODEL", "scripted-model")
+    bad = dict(verdict="CHALLENGE", kind="OTHER_SUBJECT", resource_id="account_900", fact_id="evidence_3:00001", reason="x")
+    live, provider = client(tmp_path, [submit(**bad), submit(**bad), submit(**bad), submit(**bad)])
+    agent = LLMSkepticAgent(live, base_world())
+    adjustments, done, _ = run_queue(agent, [TARGET], Budget(10))
+    inv = done[0]
+    assert provider.calls == 3 and inv.gate_retries == 2  # first answer + 2 retries, then stop
+    assert inv.gate is not None and not inv.gate.accepted and adjustments == {}
+
+
+def test_confirm_is_never_sent_back(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.setenv("SKEPTIC_MODEL", "scripted-model")
+    live, provider = client(tmp_path, [submit(verdict="CONFIRM", reason="ok")])
+    inv = LLMSkepticAgent(live, base_world()).investigate(TARGET, Budget(10))
+    assert provider.calls == 1 and inv.gate_retries == 0 and inv.outcome == "CONFIRM"
+
+
+def test_skeptic_budgets_come_from_config_env_then_overrides(monkeypatch: Any) -> None:
+    from pcda import config
+
+    monkeypatch.delenv("SKEPTIC_BUDGET_TEST", raising=False)
+    monkeypatch.delenv("SKEPTIC_BUDGET_SAMPLE", raising=False)
+    assert config.skeptic_budgets() == {"sample": 60, "test": 0}
+    monkeypatch.setenv("SKEPTIC_BUDGET_TEST", "120")
+    assert config.skeptic_budgets()["test"] == 120
+    assert config.skeptic_budgets({"test": 5})["test"] == 5
 
 
 def test_replay_of_an_unrecorded_conversation_is_a_cache_miss(tmp_path: Any, monkeypatch: Any) -> None:
