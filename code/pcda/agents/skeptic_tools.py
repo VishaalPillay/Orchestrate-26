@@ -6,6 +6,51 @@ results. A tool returns compact JSON capped at TOOL_CAP characters (Groq's
 free tier allows 8K tokens a minute, and the whole history is resent on every
 turn). Identifiers are shown as owners ("subject", "user_12", or counted as
 unresolved), never as raw emails, phones or hashes. No tool writes anything.
+
+Tool contract. The schemas sent to the model (TOOL_SCHEMAS, SUBMIT_TOOL) are part
+of the skeptic's cache key, so their text is frozen; this table is the full
+description. Every parameter is a JSON string. Every error comes back as
+{"error": ...}: not_found, bad_arguments, missing_argument:<name>,
+unknown_tool, or not_an_identifier.
+
+  case_context(case_id)
+    Returns: request dates, reported_status, verdict, the case's resources
+    (tier, up to 3 evidence ids, first reason cut to 140 characters, category,
+    obligation status and state) and at most 8 flags of 90 characters.
+    Use first, to see what was decided and why. Its evidence ids count as seen.
+  find_facts(identifier)
+    identifier: an email, phone, 64-hex hash or user_N, normalized in code.
+    Returns the owner of that identifier, the fact count and the last 10 facts.
+    A resource id is refused with a hint to use resource_timeline.
+    Use to see what else one identifier touches.
+  resource_timeline(resource_id)
+    Returns the owners resolved from all facts about the resource, its last 6
+    non-coverage facts, up to 3 facts that name it as their source
+    (pointed_to_by) and its last 6 activity rows, each with after_audit.
+    Use first for any pick: it shows whose record this is.
+  activity_for(resource_id, from?, to?)
+    from/to: optional ISO-8601 instants (unparseable values are ignored).
+    Returns up to 10 system_activity rows for the resource in that window.
+    Use to see a resource's deletion and sync history.
+  candidate_resources(case_id, system_id)
+    Returns up to 8 deletion_worker DELETE_RECORD/ANONYMIZE_RECORD rows on the
+    system between the case's requested_at and audit_at, nearest to
+    reported_at first, each with gap_min, within_window (15 min),
+    result_fits_status, owners_from_facts and up to 3 cases holding the
+    resource; total counts all rows.
+    Use to test an activity pick against its competitors and other requests.
+  get_rule(category)
+    Returns the deletion rule (condition, action, required_state), or
+    not_found with the list of categories.
+  submit_verdict(verdict, reason, kind?, resource_id?, fact_id?, other_case_id?)
+    verdict in CONFIRM, CHALLENGE, PROPOSE; kind in OTHER_SUBJECT,
+    OTHER_REQUEST, MISSED_LINK. Ends the investigation; the gate
+    (skeptic_gate.evaluate) checks it. A rejection comes back as this tool's
+    result, at most twice.
+
+Limits: every result is cut to TOOL_CAP characters by compact() (trailing list
+items first, with a truncated count); at most MAX_CALLS_PER_TARGET turns per
+target; the split budget comes from config.skeptic_budgets().
 """
 
 from __future__ import annotations

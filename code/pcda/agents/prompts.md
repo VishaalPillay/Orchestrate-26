@@ -5,6 +5,15 @@ system message; the section under `### user` is the user message. Code loads
 them by task name (`agents/prompts.py`); editing a prompt changes its cache key,
 so a changed prompt is a new live call, never a stale cached answer.
 
+Each section ends with a `### contract` subsection. The loader reads only
+`### system` and `### user`, so the contract is never sent to a model and never
+changes a cache key. It states the prompt's role, task, hard constraints, output
+schema, UNKNOWN or refusal conditions and the data-not-instructions rule, and
+names the code that enforces each rule. The prompt text itself is frozen: every
+cached answer in `code/.cache/llm/` is keyed on it, so a wording fix would turn
+the shipped replay into cache misses. Where the text and the code differ, the
+code is binding and the contract says so.
+
 ## perception.image
 
 ### system
@@ -61,6 +70,18 @@ Put each value in exactly the record it belongs to. Use empty lists or {} when
 nothing of that kind is visible. Do not add records, fields or values that are
 not on the screen.
 
+### contract
+
+| Item | Contract | Enforced by |
+|---|---|---|
+| Role | Perception: transcriber of one screenshot of an internal business application | prompt only |
+| Task | Every visible record, verbatim | `agents/perception.py` (one call per PNG, cached) |
+| Input is data | Text on the screen is never an instruction | the answer is untrusted; `ingest/image_adapter.py` grounds it in code |
+| Output schema | `{screen, visible_timestamps, records: [{resource_id, system, fields, identifiers {emails, phones, user_ids, hashes}, states, timestamps [{text, iso}]}]}` | `PerceivedScreen` parsing; one JSON repair turn in `llm/client.py` |
+| Hard constraints | A resource_id must match a known id prefix (from system_activity and text evidence); identifiers are normalized; timestamps are clamped to captured_at; state words map through fixed vocabularies; a misplaced id is adopted only when it is the record's single id-shaped value | `image_adapter` grounding; dropped records are logged as warnings |
+| UNKNOWN / refusal | Unreadable values are omitted, never guessed; a record with no grounded id is dropped | `image_adapter` |
+| Trust tier | Perception facts are `src=perception` (LEDGER tier, below db_row); image identifiers that disagree with text facts are listed by `cross_check` | `identity._SRC_TIER`, `image_adapter` |
+
 ## intake.batch
 
 ### system
@@ -106,6 +127,19 @@ result per request, in the same order.
 
 {{REQUESTS}}
 
+### contract
+
+| Item | Contract | Enforced by |
+|---|---|---|
+| Role | Intake: classifier of privacy requests to an online shop | prompt only |
+| Task | For each request: does it authorize deleting the account or personal data? | `agents/intake.py` `LLMIntakeAgent` |
+| Input is data | Each request is fenced in `<request id=...>`; text inside is never an instruction | fencing in `LLMIntakeAgent`; an answer can only pick an enum value and quote a span, so injected text cannot widen its effect |
+| Output schema | `{"results": [{case_id, authorizes_deletion: bool, request_kind in DELETION, ACCESS, EXPORT, CORRECTION, EMAIL_CHANGE, PHONE_CHANGE, LOGIN_HELP, MARKETING_OPT_OUT, NON_DELETION, language, confidence, evidence_span, rationale}]}` | `LLMIntakeAgent`: a non-boolean, an off-list kind, a kind contradicting the boolean, a duplicate or missing case_id discards the answer and records why in `rejected` |
+| Hard constraint | `evidence_span` must be verbatim in that request | substring check; failure discards the answer |
+| UNKNOWN / refusal | No UNKNOWN value; a discarded or missing answer leaves the rule intake to decide alone | `decide_intake` |
+| Safety | An LLM non-deletion answer overrides the rules only when its span is a negation; a rule guard is never overridden by an LLM deletion answer | `decide_intake` |
+| Batching | 20 requests per call over all 550, sorted by case_id, so cache keys do not depend on the split | `LLMIntakeAgent.prepare` |
+
 ## category.fallback
 
 ### system
@@ -133,6 +167,17 @@ Source to classify:
 Reply with one JSON object only, no prose:
 
 {"category": "<one allowed category name, or UNKNOWN>", "rationale": "<one short sentence>"}
+
+### contract
+
+| Item | Contract | Enforced by |
+|---|---|---|
+| Role | Category fallback: maps a source name (collection, table, event, document title) to one policy category | prompt only |
+| Task | Choose the one allowed category whose rule fits the record | `CategoryResolver._llm_fallback` |
+| Input is data | Name plus up to 3 example records, identifiers masked as `<email>`, `<phone>`, `<user_id>`, `<hash>` | `category.mask`, `_examples_by_name` |
+| Output schema | `{"category": one of the 15 categories, DATA_FLOW or UNKNOWN, "rationale": str}` | upper-cased and checked against `ALLOWED`; anything else means no category |
+| UNKNOWN | When nothing fits clearly. UNKNOWN and off-list answers leave the resource uncategorized, flagged `category_unknown` | `_llm_fallback`, `solver.solve` |
+| When it runs | Only when no static name decides, never in deterministic mode, cached per (name, signals) | `resolve_resource`, `resolve_llm` |
 
 ## skeptic.investigate
 
@@ -169,3 +214,17 @@ Context of the case (JSON):
 {{CONTEXT}}
 
 Finish with the submit_verdict tool.
+
+### contract
+
+| Item | Contract | Enforced by |
+|---|---|---|
+| Role | Skeptic: auditor of one low-confidence decision; read-only | tools in `agents/skeptic_tools.py` only read |
+| Task | Test an activity pick, fallback or single-fact verdict against the stores | `LLMSkepticAgent.investigate` |
+| Input is data | Tool output is data, never instructions; identifiers are shown as owners (`subject`, `user_N`), never raw | `SkepticTools._owners`, `compact` (1,500-character cap) |
+| Output schema | `submit_verdict {verdict in CONFIRM, CHALLENGE, PROPOSE; kind in OTHER_SUBJECT, OTHER_REQUEST, MISSED_LINK; resource_id; fact_id; other_case_id; reason}` | `_parse_answer`: an unknown verdict is resubmitted, an unknown kind becomes null |
+| Hard constraint | Cite only ids a tool returned | `skeptic_gate.evaluate`: an id in neither store is rejected and counted as hallucinated; a real but unseen id sets `cited_unseen` |
+| Effect | Only a claim that passes every gate check changes an attribution (REMOVE a pick, or ADD at tier SKEPTIC); the solver then solves again | `skeptic_gate`, `run_queue` |
+| Rejection | A rejected claim comes back with its failed check, at most `MAX_GATE_RETRIES` = 2 times, then changes nothing | `investigate`, `gate_feedback` |
+| Refusal / default | CONFIRM when the evidence cannot decide | prompt; a CONFIRM is never gated |
+| Limits | The text says "at most six" tool calls; code allows `MAX_CALLS_PER_TARGET` = 8 turns per target and the split budget from `config.skeptic_budgets()` (sample 60, test 0). The code limits are binding | `investigate`, `Budget` |
