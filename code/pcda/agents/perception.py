@@ -81,8 +81,10 @@ def parse_screen(evidence_id: str, data: Any) -> tuple[PerceivedScreen, list[str
         if not isinstance(r, dict):
             notes.append(f"record {i}: not an object")
             continue
-        idents = r.get("identifiers") if isinstance(r.get("identifiers"), dict) else {}
-        fields = r.get("fields") if isinstance(r.get("fields"), dict) else {}
+        raw_idents = r.get("identifiers")
+        idents: dict[str, Any] = raw_idents if isinstance(raw_idents, dict) else {}
+        raw_fields = r.get("fields")
+        fields: dict[str, Any] = raw_fields if isinstance(raw_fields, dict) else {}
         stamps: list[tuple[str, str | None]] = []
         for t in r.get("timestamps") or []:
             if isinstance(t, dict) and t.get("text"):

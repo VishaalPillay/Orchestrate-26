@@ -88,6 +88,10 @@ class LineageGraph:
                 out.update(_DOWNSTREAM.findall(c.details))
         return frozenset(out)
 
+    def affects(self, guard_resource_id: str, resource_id: str, t: datetime) -> bool:
+        """True if the flow/backup guard_resource_id can copy or recreate resource_id at t."""
+        return resource_id in self.reachable(guard_resource_id, t)
+
     def canonical_systems(self) -> dict[str, SystemVote]:
         """resource-id prefix -> the system that owns resources with that prefix.
 
@@ -159,7 +163,3 @@ class SystemVote:
     tier: str  # which evidence tier decided
     tier_votes: dict[str, int]
     all_targets: dict[str, int]  # every target_system seen for the prefix, any tier
-
-    def affects(self, guard_resource_id: str, resource_id: str, t: datetime) -> bool:
-        """True if the flow/backup guard_resource_id can copy or recreate resource_id at t."""
-        return resource_id in self.reachable(guard_resource_id, t)

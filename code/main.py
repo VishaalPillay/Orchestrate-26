@@ -30,8 +30,8 @@ from pcda.pipeline import CaseResult, Context, build_context, run_case
 from pcda.planner import serialize_steps
 from pcda.validator import ContractViolation, validate_output
 
-BLAST_MAX_VERDICTS = 10
-BLAST_MAX_STEPS = 25
+BLAST_MAX_VERDICTS = config.BLAST_MAX_VERDICTS
+BLAST_MAX_STEPS = config.BLAST_MAX_STEPS
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

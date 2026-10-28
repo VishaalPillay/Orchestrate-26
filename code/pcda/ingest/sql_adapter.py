@@ -25,7 +25,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from pcda.facts import ATTR_COVERAGE, ATTR_VACUOUS, Fact, FactKind, parse_ts
 from pcda.ingest.base import IngestReport, ManifestRow
@@ -148,7 +148,7 @@ class SqlAdapter:
             else:
                 systems_seen.add(system)
             fields = {k: v for k, v in record.items() if k not in _TS_COLUMNS}
-            extra: dict[str, object] = {"role": role}
+            extra: dict[str, Any] = {"role": role}
             if "record_json" in record:
                 fields = json.loads(record["record_json"])
                 extra["collection"] = record.get("collection_name")

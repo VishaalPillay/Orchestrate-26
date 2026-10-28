@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Final, Protocol
 
+from pcda import config
 from pcda.llm.client import LLMClient
 
 
@@ -153,7 +154,7 @@ LLM_KINDS: Final[tuple[str, ...]] = (
 )
 INTAKE_TASK: Final = "intake.batch"
 INTAKE_MODEL_ENV: Final = "INTAKE_MODEL"
-BATCH_SIZE: Final = 20
+BATCH_SIZE: Final = config.INTAKE_BATCH_SIZE
 INTAKE_SCHEMA: Final[dict[str, object]] = {"type": "object", "required": ["results"]}
 
 

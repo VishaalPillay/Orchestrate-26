@@ -18,11 +18,12 @@ import hashlib
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import IntEnum
 from pathlib import Path
 from typing import Final
 
+from pcda import config
 from pcda.cases import CaseRequest
 from pcda.facts import ATTR_LINKED, ATTR_SRC, ATTR_TABLE, Fact, FactKind, FactStore
 from pcda.lineage import Claim, LineageGraph
@@ -85,11 +86,8 @@ _SRC_TIER: Final[dict[str, LinkTier]] = {
     "perception": LinkTier.LEDGER,
 }
 
-# activity_temporal gate (b): |event_time - reported_at| must be within this.
-# Recon: the five accounts found only in system_activity (cases 01, 02, 07,
-# 08, 10) sit 0.3-8.0 minutes from reported_at; the nearest wrong candidate in
-# the sample is 44 minutes away.
-ACTIVITY_WINDOW: Final = timedelta(minutes=15)
+# activity_temporal gate (b): see config.ACTIVITY_WINDOW.
+ACTIVITY_WINDOW: Final = config.ACTIVITY_WINDOW
 
 
 class UnionFind:
@@ -300,81 +298,11 @@ class ResourceAttribution:
         goes through activity_temporal. The system of a resource is the most
         frequent system_id among its best-tier facts.
         """
-        idents = closure.identifiers_of(user_id)
-        cands: dict[str, _Candidate] = defaultdict(_Candidate)
-        seen: set[str] = set()
-        for ident in sorted(idents):
-            for fact in store.by_identifier(ident):
-                if fact.fact_id in seen or fact.resource_id is None:
-                    continue
-                seen.add(fact.fact_id)
-                ResourceAttribution._from_fact(fact, ident, cands, case.audit_at, stable=ident == user_id)
+        cands = ResourceAttribution._candidates(case, user_id, closure, store, lineage)
         claim_system: dict[str, str] = {}
         for claim in lineage.claims:
             claim_system.setdefault(claim.resource_id, claim.target_system)
-        for claim in lineage.claims:
-            if claim.event_type == "LINK_RESOURCE_IDENTITY":
-                matched = _text_identifiers(claim.details) & idents
-                if matched:
-                    cands[claim.resource_id].add(
-                        LinkTier.CATALOG_LINK,
-                        claim.target_system,
-                        f"{claim.activity_id} data catalog links {claim.resource_id} to {sorted(matched)[0]}",
-                        claim.activity_id,
-                        claim.event_time,
-                        late=claim.event_time > case.audit_at,
-                    )
-
-        # Post-audit guardrail: what existed at or before audit_at. A fact's time is
-        # when it was observed, not when its file was captured: a record observed
-        # before the audit in a later-delivered snapshot did exist at the audit.
-        existed = {
-            f.resource_id
-            for f in store
-            if f.resource_id is not None and f.observed_at <= case.audit_at
-        }
-        existed |= {c.resource_id for c in lineage.claims if c.event_time <= case.audit_at}
-        post_audit_only = {rid for rid in cands if rid not in existed}
-
-        out = [
-            AttributedResource(
-                resource_id=rid,
-                system_id=(
-                    sorted(c.systems.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
-                    if c.systems
-                    else claim_system.get(rid, "unknown")
-                ),
-                tier=c.tier,
-                reasons=tuple(sorted(c.reasons)),
-                evidence_ids=tuple(sorted(c.evidence)),
-                late_evidence_ids=tuple(sorted(c.late_evidence)),
-            )
-            for rid, c in cands.items()
-            if rid not in post_audit_only
-            and c.latest is not None
-            and (c.latest >= case.requested_at or c.stable)
-        ]
-        rejected = []
-        for rid, c in sorted(cands.items()):
-            if rid in post_audit_only:
-                why = "post-audit: no fact observed and no activity row at or before audit_at"
-            elif c.latest is not None and c.latest < case.requested_at and not c.stable:
-                why = (
-                    f"stale: newest supporting observation {c.latest:%Y-%m-%d} precedes "
-                    f"requested_at {case.requested_at:%Y-%m-%d}"
-                )
-            else:
-                continue
-            rejected.append(
-                AttributedResource(
-                    resource_id=rid,
-                    system_id=(c.systems.most_common(1)[0][0] if c.systems else claim_system.get(rid, "unknown")),
-                    tier=c.tier,
-                    reasons=tuple(sorted(c.reasons)) + (why,),
-                    evidence_ids=tuple(sorted(c.evidence)),
-                    late_evidence_ids=tuple(sorted(c.late_evidence)),
-                )
-            )
+        out, rejected = ResourceAttribution._gate(case, cands, claim_system, _existed_at(store, lineage, case.audit_at))
         for pick in ResourceAttribution.activity_temporal(case, lineage, out):
             # Ownership exclusivity: an activity row is a claim about timing, never about
             # whose record it is. A record that identifiers elsewhere tie to another user
@@ -393,6 +321,79 @@ class ResourceAttribution:
                 )
             )
         out.sort(key=lambda a: (a.system_id, a.resource_id))
+        return out, rejected
+
+    @staticmethod
+    def _candidates(
+        case: CaseRequest, user_id: str, closure: IdentityClosure, store: FactStore, lineage: LineageGraph
+    ) -> dict[str, _Candidate]:
+        """Every resource a fact or data-catalog row links to one of the subject's identifiers."""
+        idents = closure.identifiers_of(user_id)
+        cands: dict[str, _Candidate] = defaultdict(_Candidate)
+        seen: set[str] = set()
+        for ident in sorted(idents):
+            for fact in store.by_identifier(ident):
+                if fact.fact_id in seen or fact.resource_id is None:
+                    continue
+                seen.add(fact.fact_id)
+                ResourceAttribution._from_fact(fact, ident, cands, case.audit_at, stable=ident == user_id)
+        for claim in lineage.claims:
+            if claim.event_type == "LINK_RESOURCE_IDENTITY":
+                matched = _text_identifiers(claim.details) & idents
+                if matched:
+                    cands[claim.resource_id].add(
+                        LinkTier.CATALOG_LINK,
+                        claim.target_system,
+                        f"{claim.activity_id} data catalog links {claim.resource_id} to {sorted(matched)[0]}",
+                        claim.activity_id,
+                        claim.event_time,
+                        late=claim.event_time > case.audit_at,
+                    )
+        return cands
+
+    @staticmethod
+    def _gate(
+        case: CaseRequest, cands: dict[str, _Candidate], claim_system: dict[str, str], existed: set[str]
+    ) -> tuple[list[AttributedResource], list[AttributedResource]]:
+        """Split candidates by the post-audit guardrail and the staleness gate (reason last on rejects)."""
+        post_audit_only = {rid for rid in cands if rid not in existed}
+        out = [
+            AttributedResource(
+                resource_id=rid,
+                system_id=(
+                    sorted(c.systems.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                    if c.systems
+                    else claim_system.get(rid, "unknown")
+                ),
+                tier=c.tier,
+                reasons=tuple(sorted(c.reasons)),
+                evidence_ids=tuple(sorted(c.evidence)),
+                late_evidence_ids=tuple(sorted(c.late_evidence)),
+            )
+            for rid, c in cands.items()
+            if rid not in post_audit_only and c.latest is not None and (c.latest >= case.requested_at or c.stable)
+        ]
+        rejected = []
+        for rid, c in sorted(cands.items()):
+            if rid in post_audit_only:
+                why = "post-audit: no fact observed and no activity row at or before audit_at"
+            elif c.latest is not None and c.latest < case.requested_at and not c.stable:
+                why = (
+                    f"stale: newest supporting observation {c.latest:%Y-%m-%d} precedes "
+                    f"requested_at {case.requested_at:%Y-%m-%d}"
+                )
+            else:
+                continue
+            rejected.append(
+                AttributedResource(
+                    resource_id=rid,
+                    system_id=(c.systems.most_common(1)[0][0] if c.systems else claim_system.get(rid, "unknown")),
+                    tier=c.tier,
+                    reasons=(*sorted(c.reasons), why),
+                    evidence_ids=tuple(sorted(c.evidence)),
+                    late_evidence_ids=tuple(sorted(c.late_evidence)),
+                )
+            )
         return out, rejected
 
     @staticmethod
@@ -477,6 +478,17 @@ class ResourceAttribution:
                 )
             )
         return out
+
+
+def _existed_at(store: FactStore, lineage: LineageGraph, t: datetime) -> set[str]:
+    """Post-audit guardrail: resources with a fact observed, or an activity row, at or before t.
+
+    A fact's time is when it was observed, not when its file was captured: a
+    record observed before the audit in a later-delivered snapshot did exist then.
+    """
+    existed = {f.resource_id for f in store if f.resource_id is not None and f.observed_at <= t}
+    existed |= {c.resource_id for c in lineage.claims if c.event_time <= t}
+    return existed
 
 
 def conflicting_owner(

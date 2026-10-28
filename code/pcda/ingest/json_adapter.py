@@ -43,6 +43,7 @@ from pcda.ingest.base import IngestReport, ManifestRow
 from pcda.ingest.common import (
     Emitter,
     emit_record,
+    fact_attrs,
     result_to_kind,
     view_record,
 )
@@ -117,13 +118,13 @@ class JsonAdapter:
             category=record_type if record_type in _LABELS else None,
             identifiers=view.identifiers,
             table=table,
-            **{
+            **fact_attrs({
                 ATTR_STATE: state,
                 ATTR_PII_FIELDS: ",".join(view.pii_fields) or None,
                 ATTR_ID_FIELDS: ",".join(view.id_fields) or None,
                 "record_type": record_type,
                 "src": "ledger",
-            },
+            }),
         )
 
     # -- bundle ------------------------------------------------------------
@@ -179,7 +180,7 @@ class JsonAdapter:
                 system_id=service,
                 resource_id=rid,
                 table=collection,
-                **{ATTR_STATE: "NOT_FOUND", "status_code": rec.get("status_code")},
+                **fact_attrs({ATTR_STATE: "NOT_FOUND", "status_code": rec.get("status_code")}),
             )
             return
         if collection == "index_queries":
@@ -236,7 +237,7 @@ class JsonAdapter:
     def _coverage(
         em: Emitter, at: datetime, system_id: str | None, table: str, vacuous: bool
     ) -> None:
-        attrs: dict[str, object] = {ATTR_COVERAGE: "true"}
+        attrs: dict[str, Any] = {ATTR_COVERAGE: "true"}
         if vacuous:
             attrs[ATTR_VACUOUS] = "true"
         em.emit(

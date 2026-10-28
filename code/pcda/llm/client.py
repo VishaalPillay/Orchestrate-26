@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Final, Protocol
 
+from pcda import config
 from pcda.llm.cache import DiskCache, content_key
 from pcda.llm.ledger import TokenLedger
 
@@ -171,7 +172,7 @@ class OpenAICompatProvider:
             from openai import OpenAI  # lazy: deterministic runs never import it
 
             # Retries are ours (Retry-After aware), so the SDK's are off.
-            timeout = float(os.environ.get("LLM_TIMEOUT_S", "120") or "120")
+            timeout = float(os.environ.get("LLM_TIMEOUT_S", config.LLM_TIMEOUT_S_DEFAULT) or config.LLM_TIMEOUT_S_DEFAULT)
             self._sdk = OpenAI(base_url=self._base_url, api_key=self._api_key, max_retries=0, timeout=timeout)
         return self._sdk
 
@@ -312,7 +313,7 @@ class LLMClient:
     cache: DiskCache
     ledger: TokenLedger
     providers: list[Provider] = field(default_factory=list)
-    max_attempts: int = 3
+    max_attempts: int = config.LLM_MAX_ATTEMPTS
     base_backoff: float = 2.0
 
     def complete(self, request: LLMRequest) -> LLMResponse:
@@ -447,7 +448,7 @@ class LLMClient:
 def build_client(mode: RunMode, cache: DiskCache, ledger: TokenLedger) -> LLMClient:
     providers: list[Provider] = []
     if mode is RunMode.LIVE:
-        rpm = int(os.environ.get("LLM_RPM_LIMIT", "10") or "10")
+        rpm = int(os.environ.get("LLM_RPM_LIMIT", config.LLM_RPM_LIMIT_DEFAULT) or config.LLM_RPM_LIMIT_DEFAULT)
         no_thinking = os.environ.get("LLM_DISABLE_THINKING", "0").strip() == "1"
         for name in (n.strip().lower() for n in os.environ.get("LLM_PROVIDERS", "").split(",")):
             if not name:

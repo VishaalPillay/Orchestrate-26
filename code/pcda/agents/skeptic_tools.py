@@ -62,6 +62,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
+from pcda import config
 from pcda.cases import CaseRequest
 from pcda.facts import ATTR_LINKED, ATTR_STATE, ATTR_TABLE, Fact, FactStore
 from pcda.identity import IdentityClosure, normalize_identifier
@@ -71,7 +72,7 @@ from pcda.policy import ObligationTemplate
 if TYPE_CHECKING:
     from pcda.pipeline import CaseResult
 
-TOOL_CAP: Final = 1500
+TOOL_CAP: Final = config.SKEPTIC_TOOL_CAP
 RESOURCE_ID: Final = re.compile(r"^[a-z][a-z_]*\d+$")
 _IGNORED_ATTRS: Final = frozenset({"source_line", "src", "table", "coverage", "is_vacuous", "id_fields"})
 
@@ -195,7 +196,7 @@ class SkepticTools:
         if res is None or case is None:
             return {"error": "not_found"}
         cert = res.certificate
-        picks = [
+        picks: list[dict[str, Any]] = [
             {
                 "resource_id": o.resource_id,
                 "system_id": o.system_id,

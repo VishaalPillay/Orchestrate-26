@@ -17,6 +17,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Final, Protocol
 
+from pcda import config
 from pcda.agents import prompts
 from pcda.agents.skeptic_gate import GateResult, evaluate
 from pcda.agents.skeptic_tools import SUBMIT_TOOL, TOOL_SCHEMAS, SkepticTools, SkepticWorld, compact
@@ -26,8 +27,8 @@ from pcda.solver import Certificate
 
 SKEPTIC_TASK: Final = "skeptic"
 SKEPTIC_MODEL_ENV: Final = "SKEPTIC_MODEL"
-MAX_CALLS_PER_TARGET: Final = 8
-MAX_GATE_RETRIES: Final = 2  # rejected claims returned to the agent before "no change"
+MAX_CALLS_PER_TARGET: Final = config.SKEPTIC_MAX_CALLS_PER_TARGET
+MAX_GATE_RETRIES: Final = config.SKEPTIC_MAX_GATE_RETRIES
 VERDICTS: Final = ("CONFIRM", "CHALLENGE", "PROPOSE")
 KINDS: Final = ("OTHER_SUBJECT", "OTHER_REQUEST", "MISSED_LINK")
 

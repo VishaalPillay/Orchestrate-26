@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from pcda import config
 from pcda.agents.skeptic import Target
 from pcda.agents.skeptic_gate import CHALLENGEABLE
 from pcda.agents.skeptic_tools import SkepticWorld
@@ -24,7 +25,7 @@ from pcda.cases import CaseRequest
 from pcda.solver import ObligationStatus, Verdict
 
 # Largest |event - reported_at| among the 12 correct picks on the public samples (minutes).
-SAMPLE_ENVELOPE_MIN: Final = 74.1
+SAMPLE_ENVELOPE_MIN: Final = config.SKEPTIC_SAMPLE_ENVELOPE_MIN
 
 
 def pick_gap_minutes(world: SkepticWorld, case: CaseRequest, evidence_ids: tuple[str, ...]) -> float:

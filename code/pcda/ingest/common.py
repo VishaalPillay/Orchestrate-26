@@ -14,7 +14,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 from pcda.facts import (
     ATTR_ID_FIELDS,
@@ -244,6 +244,11 @@ def _flatten(fields: Mapping[str, object]) -> Iterable[tuple[str, object]]:
             yield key, value
 
 
+def fact_attrs(values: dict[str, Any]) -> dict[str, Any]:
+    """Extra fact attributes passed as **kwargs (typed so they never bind a named parameter)."""
+    return values
+
+
 def view_record(fields: Mapping[str, object]) -> RecordView:
     """Identifiers and PII exposure of one record; scalars keep the non-identifier fields."""
     idents: set[str] = set()
@@ -331,6 +336,6 @@ def emit_record(
                 table=table,
                 topology=topology,
                 source_line=source_line,
-                **{ATTR_LINKED: value, "via": key},
+                **fact_attrs({ATTR_LINKED: value, "via": key}),
             )
     return fact
