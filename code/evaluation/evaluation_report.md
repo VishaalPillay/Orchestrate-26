@@ -9,7 +9,7 @@ python code/evaluation/score.py --diff
 
 Current (iteration 19): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
 
-Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` comes from `--mode live` and is reproduced byte for byte by `--mode replay` from `code/.cache/llm/`. Model stages: screenshot perception, LLM intake and the category fallback. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row and scores the same on samples.
+Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` is written by `--mode replay` from the cache of the last live run (`code/.cache/llm/`): iterations 15 to 19 added no model call, so replay has zero cache misses, and the sample skeptic replays 60 of 60 calls. A confirming `--mode live` run after these iterations is still to be done; it should make 0 provider calls. Model stages: screenshot perception, LLM intake, the category fallback, and the skeptic on the samples. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row (case_45) and scores the same on samples.
 
 ## Iteration log
 
@@ -232,7 +232,7 @@ gemini-3.6-flash could not be measured today: its free-tier quota was exhausted 
 - **Replay** (`--mode replay --split all`): `output.csv` and the sample output are byte-identical to the live run, with 0 provider calls and 41 cache hits.
 - **Live vs deterministic:** 1 of 518 rows differs. case_45 stays COMPLETE and gains 5 `VERIFY_RECORD_PRESENT` steps for `audit_record_001`, `002`, `004`, `005` and `006`, which only the LLM category fallback can categorize. Samples score identically in all three modes.
 
-## Remaining sample losses after iteration 12
+## Remaining sample losses (iteration 19)
 
 14 gold steps are still missed and there are no extra steps:
 
@@ -240,6 +240,19 @@ gemini-3.6-flash could not be measured today: its free-tier quota was exhausted 
 - 5 accounts still contested in their time window (cases 18, 23, 28, 29, 32);
 - 2 security audit records that appear in no participant data (`audit_record_6645`, `audit_record_5569`);
 - `account_004` (case_04), which appears in no participant data either.
+
+## Honest limits
+
+What this solution does not do, or does not know, measured where possible.
+
+- **144 of 507 test deletion cases have no account step.** Gold has an account step in 32 of 32 sample cases. For these cases no deletion_worker row is forced: each keeps 2 or more feasible rows after every constraint (iteration 15), and some of those rows belong to people outside the dataset. A nearest-to-`reported_at` tie-breaker was measured (iteration 18): 129/133 agreement on picks the data already forces, but only 2 of 6 correct on the real contested sample cases, so sample F1 fell from 0.962 to 0.958. It was reverted, and the solution abstains: no account step rather than a likely-wrong one.
+- **3 sample gold resources have no participant evidence.** `audit_record_6645`, `audit_record_5569` and `account_004` appear in no participant file under any encoding (iteration 19 search). No evidence-grounded pipeline can produce them, so sample recall tops out below 1.000.
+- **6 identifier-less sample analytics rows are missed.** After anonymization they carry no identifier. A two-sided forced assignment found 0 assignable rows, and analytics results do not follow `reported_status` (iteration 16).
+- **Unmeasured test-only behavior.** The samples never exercise ownership conflicts (87 test picks refused, 0 on samples), support message/attachment conflicts (8 test records, decided by content in iteration 19), or the 116 test security-audit records whose only evidence was captured after `audit_at`. These rules follow the specification, but no gold confirms them.
+- **The skeptic is not a reliable error detector.** In the negative control it caught 0 of 11 planted wrong picks (iteration 13). It is kept as a gated, no-change guard on the samples and skipped on test (budget 0); the check it could not make became deterministic code (iteration 14).
+- **Prompt text is frozen.** The cache keys include the prompt and tool text, so known wording issues (for example, the skeptic prompt says "at most six" tool calls while the code allows 8 turns) are documented in `prompts.md` contracts instead of being edited.
+- **Free-tier model use.** Every model call went to free tiers: Google Gemini (gemini-3.6-flash for perception, gemini-3.5-flash-lite for intake, category and skeptic) and Groq as a fallback. Free-tier terms can allow the provider to keep or use submitted inputs. What was sent: request texts and the 11 screenshots as they are (the dataset is fictional by the challenge rules), category examples with emails, phones, user ids and hashes masked, and skeptic tool output with identifiers replaced by owner labels. No key or credential is in any prompt, log or cache entry. Daily quotas shaped several choices (perception model, skeptic budget).
+- **Two failure handlers have no test:** the HTTP 400 `reasoning_effort` retry and the blast-radius stop (see the robustness table in `code/ARCHITECTURE.md`).
 
 ## Metrics
 

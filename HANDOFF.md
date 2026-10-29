@@ -13,7 +13,7 @@ Samples (32 cases, `python code/evaluation/score.py --diff`):
 | evidence_id accuracy on matched steps | 179/179 |
 | Exact-sequence matches | 20/32 |
 
-Evaluation set: `output.csv` at the repo root comes from `--mode live` and is reproduced byte for byte by `--mode replay`. It has 518 sorted rows and passes the validator: 354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE. Of those 11, 10 come from intake and 1 (case_61) is the no-provable-obligation fallback. `--mode deterministic` differs in exactly 1 row (case_45, see below).
+Evaluation set: `output.csv` at the repo root is written by `--mode replay` from the last live run's cache (zero misses after iterations 15 to 19; a confirming live run is pending). It has 518 sorted rows and passes the validator: 354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE. Of those 11, 10 come from intake and 1 (case_61) is the no-provable-obligation fallback. `--mode deterministic` differs in exactly 1 row (case_45, see below).
 
 Custom overlays: 8/8 pass. Step-aligned field accuracy is 1.000 on every field, so every sample loss is a missing step, never a wrong one.
 
@@ -52,17 +52,17 @@ Reproduce (no provider calls; everything comes from `code/.cache/llm/`):
 | `509cd25` | Test-side leak audit and invariants; staleness gate spares `user_id` matches (case_34 +1 step) (iteration 17) |
 | (next commit) | 8th custom overlay: activity pick owned by another user is refused |
 
-`55a263e` adds the skeptic agent, gate and controls; the next commit adds ownership exclusivity and skips the skeptic on test. The working tree is clean after the last commit. 73 tests pass. `log.txt` (git-ignored) has every turn.
+`55a263e` adds the skeptic agent, gate and controls; the next commit adds ownership exclusivity and skips the skeptic on test. 114 tests pass; ruff and mypy are clean. `log.txt` (git-ignored) has every turn.
 
 **Not in git, but required:** `code/.cache/llm/` holds the 11 screenshot transcriptions. It must be shipped inside `code.zip`. Without it, deterministic runs skip every PNG and the scores above won't reproduce. `.env` is git-ignored and must never be zipped. It currently sets `PERCEPTION_MODEL=gemini-3.6-flash`, because the 3.8 and 3.7 quotas were exhausted.
 
 ## Open issues
 
-1. ~~Live and replay modes stop at intake~~ **resolved**: the LLM intake runs, and replay reproduces live byte for byte. The skeptic is still the no-op in every mode.
+1. ~~Live and replay modes stop at intake~~ **resolved**: the LLM intake runs, and replay reproduces live byte for byte. The skeptic runs on the samples (60 cached calls, 0 changes) and is skipped on test (`config.SKEPTIC_BUDGET_TEST` = 0).
 2. **Screenshot-only audit records have no category in deterministic mode only.** In live/replay the LLM category fallback maps `screen:Account events` to SECURITY_AUDIT_LOG (case_45). Deterministic still flags them: `audit_record_001`, `002`, `004`, `005` and `006` (evidence_37) are flagged `category_unknown`, because their only fact has table `screen:Account events` and they have no activity row. `audit_record_003` resolves through an activity row. Fix idea: let a perception fact fall back to the category of its canonical system (`security_service` → SECURITY_AUDIT_LOG via `_ACTIVITY_TARGETS`), or add the screen title to the inferred list. Affects the cases whose subject is `user_03`.
 3. **116 `unknown_state` audit records.** Their only evidence was captured after `audit_at`. In INCOMPLETE cases they are still verified with `""`, which matches gold, but in COMPLETE cases they are dropped from the steps. That's probably right, and unverified on the evaluation set.
 4. **case_61 is the only fallback.** `object_19` appears only in activity-catalog rows: no fact, and an unknown category (`object_storage`). Nothing on any screen decides it.
-5. **Activity-joint outliers.** case_45 (row 35 hours before `reported_at`) and case_493 (−131 min) are accepted picks far outside the sample timing; both are flagged `skeptic_pending`. The skeptic is a no-op in deterministic mode.
+5. **Activity-joint outliers.** case_45 (row 35 hours before `reported_at`) and case_493 (−131 min) are accepted picks far outside the sample timing; both are flagged `skeptic_skipped:budget` on test. The skeptic is a no-op in deterministic mode.
 6. **LLM quota** (gemini-3.6-flash also ran out during the intake comparison, so its column is pending). The free tier exhausted gemini-3.8-flash and gemini-3.7-flash today. gemini-3.6-flash, 3.5-flash, 3.5-flash-lite and 3.1-flash-lite answered a probe. Groq's `gpt-oss-120b` rejects images; Groq's `qwen/qwen3.8-27b` accepts images ≥ 32 px and could be the vision fallback. Calls can take 2 minutes; use `LLM_TIMEOUT_S=300`.
 7. **`check_attribution.py` doesn't run the joint passes,** so its 90/111 understates current attribution.
 8. **Live re-run after the 2026-10-25 changes (iterations 15–17):** `--mode replay --split all` reproduces the new `output.csv` with zero cache misses (sample skeptic 60/60 cached), so no new category names or skeptic targets need a provider call. A live run should make 0 calls; replay must then stay byte-identical. Biggest known test leak: 144 of 507 deletion cases have no account step (no forced row), see iteration 17.

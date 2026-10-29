@@ -123,7 +123,9 @@ def build_context(mode: RunMode) -> Context:
         resolver=CategoryResolver(llm, {c: f"{t.condition} -> {t.action}" for c, t in templates.items()}),
         rule_intake=RuleIntakeAgent(),
         llm_intake=llm_intake,
-        # The LLM skeptic is not implemented; every mode uses the advisory no-op.
+        # The per-case challenge hook is advisory and a no-op in every mode. The LLM skeptic runs
+        # as a queue before the final pass (agents/skeptic_run.py) and acts only through
+        # gate-accepted adjustments.
         skeptic=NullSkepticAgent(),
         canonical=lineage.canonical_systems(),
         joint=joint,
