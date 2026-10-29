@@ -196,11 +196,16 @@ def canonicalize(attributions: list[AttributedResource], ctx: Context) -> tuple[
     return result, flags
 
 
-def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult:
-    rule_intake = ctx.rule_intake.classify(case.case_id, case.request_text)
-    subject = ctx.closure.subject_of(normalize_email(case.email))
-    flags: list[str] = []
-    # Ownership uses the full store (time-invariant); state and citations use `store`.
+def link_resources(
+    case: CaseRequest, subject: str | None, ctx: Context, adjust: bool, flags: list[str]
+) -> tuple[list[AttributedResource], list[AttributedResource]]:
+    """(attributions, deferred fallback-only joint links) for a case, before canonicalization.
+
+    Identifier attribution on the full store, then the joint activity passes,
+    the shared-pick refusal and the skeptic's gate-accepted adjustments. Every
+    refusal is appended to `flags`.
+    """
+    # Ownership uses the full store (time-invariant); state and citations use as_of(audit_at).
     # Attribution runs for every resolved subject so intake can be corroborated.
     attributions, rejected_links = (
         ResourceAttribution.for_case_detailed(case, subject, ctx.closure, ctx.store, ctx.lineage)
@@ -231,13 +236,21 @@ def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult
     deferred = [a for a in deferred if a.resource_id not in ctx.shared_picks]
     adj = ctx.skeptic_adjustments.get(case.case_id) if adjust else None
     if adj:
-        # Accepted by the gate; the solver below verifies the consequences.
+        # Accepted by the gate; the solver verifies the consequences.
         have = {a.resource_id for a in attributions}
         attributions = [a for a in attributions if a.resource_id not in adj.remove]
         attributions += [a for a in adj.add if a.resource_id not in have]
         deferred = [d for d in deferred if d.resource_id not in adj.remove]
         flags.extend(f"skeptic_accepted:REMOVE:{rid}" for rid in sorted(adj.remove))
         flags.extend(f"skeptic_accepted:ADD:{a.resource_id}" for a in adj.add)
+    return attributions, deferred
+
+
+def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult:
+    rule_intake = ctx.rule_intake.classify(case.case_id, case.request_text)
+    subject = ctx.closure.subject_of(normalize_email(case.email))
+    flags: list[str] = []
+    attributions, deferred = link_resources(case, subject, ctx, adjust, flags)
     base_attributions = attributions
     attributions, system_flags = canonicalize(attributions, ctx)
     flags.extend(system_flags)
