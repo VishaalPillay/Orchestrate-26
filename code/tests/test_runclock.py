@@ -28,6 +28,21 @@ def clock(period: int = 30) -> RunClock:
     )
 
 
+def windowed() -> RunClock:
+    t = template("Deletion worker received the final result for search_1 from search_service.")
+    base = clock()
+    return RunClock(base.band_min, base.band_max, base.horizon, base.residues, period_s=30,
+                    windows={t: (timedelta(minutes=80), timedelta(minutes=180))})
+
+
+def test_fits_needs_the_learned_window_and_residue() -> None:
+    anchor = claim("a0", "2026-09-05T11:00:00Z")
+    assert windowed().fits(anchor, claim("a1", "2026-09-05T12:40:21Z"))  # +100 min, residue 21
+    assert not windowed().fits(anchor, claim("a2", "2026-09-05T11:30:21Z"))  # +30 min: before the window
+    assert not windowed().fits(anchor, claim("a3", "2026-09-05T12:40:05Z"))  # right window, wrong residue
+    assert not windowed().fits(anchor, claim("a4", "2026-09-05T12:40:21Z", "Some unseen message for X."))  # unseen template
+
+
 def test_template_strips_ids_and_reporting_system() -> None:
     a = template("Deletion worker received the final result for search_12 from search_service.")
     b = template("Deletion worker received the final result for export_9 from export_service.")

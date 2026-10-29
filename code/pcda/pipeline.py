@@ -27,14 +27,17 @@ from pcda.identity import (
 )
 from pcda.ingest.base import IngestReport, read_manifest
 from pcda.ingest.registry import build_adapters, ingest_all
-from pcda.lineage import LineageGraph, SystemVote, resource_prefix
+from pcda.lineage import Claim, LineageGraph, SystemVote, resource_prefix
 from pcda.llm.cache import DiskCache
 from pcda.llm.client import LLMClient, RunMode, build_client
 from pcda.llm.ledger import TokenLedger
 from pcda.planner import Step, order_steps, project
 from pcda.policy import ObligationTemplate, compile_rules
-from pcda.runclock import RunClock, learn
+from pcda.runclock import RunClock, account_anchors, learn
 from pcda.solver import Certificate, ObligationStatus, Verdict, solve
+
+# Account and analytics rows are linked with the learned run clock (band, phase) and the matching rule; env switch for ablations.
+USE_RUN_CLOCK = os.environ.get("PCDA_NO_RUN_CLOCK") != "1"
 
 # Activity rows that may link a resource to a request when nothing else does.
 # (event_type, target_system, fallback_only, build options). A fallback_only pass
@@ -47,10 +50,12 @@ from pcda.solver import Certificate, ObligationStatus, Verdict, solve
 # removed (iterations 15 and 16).
 JOINT_PASSES: tuple[tuple[str, str, bool], ...] = (
     ("DELETE_RECORD", "account_service", False),
+    # With the run clock, analytics rows are linked through the case's account row (anchored, every case with no
+    # analytics link by identifiers). The old unanchored pass stays as the fallback for cases that would
+    # otherwise have no provable obligation (no account row to anchor on).
+    *((("ANONYMIZE_RECORD", "analytics_platform", False),) if USE_RUN_CLOCK else ()),
     ("ANONYMIZE_RECORD", "analytics_platform", True),
 )
-# Account rows are linked with the learned run clock (band, phase) and the matching rule; env switch for ablations.
-USE_RUN_CLOCK = os.environ.get("PCDA_NO_RUN_CLOCK") != "1"
 FALLBACK_FLAG = "fallback_no_provable_obligation"
 
 
@@ -80,6 +85,8 @@ class Context:
     joint: tuple[JointActivityAttribution, ...] = ()
     # The deletion worker's run clock, learned from the evaluation requests' identifier-pinned runs.
     clock: RunClock | None = None
+    # case_id -> the account DELETE row of the case's run (identifier pin, else the joint account pick).
+    anchors: dict[str, Claim] | None = None
     report: IngestReport = field(default_factory=IngestReport)
 
 
@@ -115,11 +122,22 @@ def build_context(mode: RunMode) -> Context:
         llm_intake.prepare([(c.case_id, c.request_text) for c in every_case])
     # Learned from identifier-pinned runs of the evaluation requests only (never sample_output.csv).
     clock = learn(load_requests(paths.DELETION_REQUESTS), closure, store, lineage) if USE_RUN_CLOCK else None
-    joint = tuple(
-        JointActivityAttribution.build(
-            every_case, closure, store, lineage, event_type=e, target_system=t, clock=clock if t == "account_service" else None
+    account_pass = JointActivityAttribution.build(
+        every_case, closure, store, lineage, event_type="DELETE_RECORD", target_system="account_service", clock=clock
+    )
+    anchors = (
+        account_anchors(
+            every_case, closure, store, lineage, {cid: a.evidence_ids[0] for cid, a in account_pass.assigned.items()}
         )
-        for e, t, _ in JOINT_PASSES
+        if clock is not None
+        else None
+    )
+    joint = (account_pass,) + tuple(
+        JointActivityAttribution.build(
+            every_case, closure, store, lineage, event_type=e, target_system=t,
+            clock=clock if not fallback_only else None, anchors=anchors if not fallback_only else None,
+        )
+        for e, t, fallback_only in JOINT_PASSES[1:]
     )
     shared_picks = find_shared_picks(every_case, closure, store, lineage, joint)
     return Context(
@@ -140,6 +158,7 @@ def build_context(mode: RunMode) -> Context:
         canonical=lineage.canonical_systems(),
         joint=joint,
         clock=clock,
+        anchors=anchors,
         shared_picks=shared_picks,
         report=report,
     )

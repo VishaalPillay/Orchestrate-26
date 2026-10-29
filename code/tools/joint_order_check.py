@@ -40,10 +40,11 @@ def main() -> int:
     every = load_requests(paths.SAMPLE_REQUESTS) + load_requests(paths.DELETION_REQUESTS)
     ok = True
     for event_type, system, fallback_only in JOINT_PASSES:
-        def build(cases: list, event_type: str = event_type, system: str = system) -> JointActivityAttribution:
+        def build(cases: list, event_type: str = event_type, system: str = system, fallback_only: bool = fallback_only) -> JointActivityAttribution:
             return JointActivityAttribution.build(
                 cases, ctx.closure, ctx.store, ctx.lineage, event_type=event_type, target_system=system,
-                clock=ctx.clock if system == "account_service" else None,
+                clock=ctx.clock if not fallback_only else None,
+                anchors=ctx.anchors if not fallback_only and system != "account_service" else None,
             )
         base = snapshot(build(every))
         print(f"{system}{' (fallback only)' if fallback_only else ''}: assigned {len(base[0])}, "

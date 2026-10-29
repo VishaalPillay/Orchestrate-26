@@ -10,6 +10,9 @@ answer key the activity-based linking never saw.
      odd-numbered ones (and the reverse). A pinned run's own account row must
      pass the band and the phase test; the number of other status-matched rows
      that also pass shows how selective the test is.
+  3. Analytics hide-and-link: every request whose analytics resource is attributed
+     by identifiers and has a deletion_worker ANONYMIZE row loses that attribution;
+     the anchored analytics pass runs with a clock learned on the other parity only.
   2. Hide-and-force: take every pinned request, hide its identifier-attributed
      account, run the real account pass (candidates, ownership exclusion, phase,
      matching) and compare what it forces with the known account.
@@ -31,7 +34,7 @@ from pcda.cases import load_requests
 from pcda.identity import REPORTED_STATUS_RESULT, JointActivityAttribution
 from pcda.llm.client import RunMode
 from pcda.pipeline import build_context
-from pcda.runclock import ACCOUNT_SYSTEM, deletion_worker_rows, learn, pinned_runs
+from pcda.runclock import ACCOUNT_SYSTEM, account_anchors, deletion_worker_rows, learn, pinned_runs
 
 
 def number(case_id: str) -> int:
@@ -98,6 +101,57 @@ def hide_and_force(ctx, test, runs) -> None:
     print(f"hide-and-force over {len(pinned)} pinned requests: {dict(tally)}")
 
 
+def hide_analytics(ctx, test) -> None:
+    every = load_requests(paths.SAMPLE_REQUESTS) + test
+    worker = deletion_worker_rows(ctx.lineage)
+    real = identity._partition
+    tally: Counter[str] = Counter()
+    for parity in (0, 1):
+        clock = learn([c for c in test if number(c.case_id) % 2 != parity], ctx.closure, ctx.store, ctx.lineage)
+        account = JointActivityAttribution.build(
+            every, ctx.closure, ctx.store, ctx.lineage, event_type="DELETE_RECORD", target_system=ACCOUNT_SYSTEM, clock=clock
+        )
+        anchors = account_anchors(
+            every, ctx.closure, ctx.store, ctx.lineage, {cid: a.evidence_ids[0] for cid, a in account.assigned.items()}
+        )
+        known: dict[str, str] = {}
+
+        def hidden(cases, closure, store, lineage, target_system, parity=parity, known=known):
+            part = real(cases, closure, store, lineage, target_system)
+            if target_system != "analytics_platform":
+                return part
+            for case in cases:
+                cid = case.case_id
+                if number(cid) % 2 != parity or cid not in part.subject_of or case.case_id not in {c.case_id for c in test}:
+                    continue
+                strong = [
+                    r for r, subjects in part.strong.items()
+                    if part.subject_of[cid] in subjects
+                    and any(w.event_type == "ANONYMIZE_RECORD" and case.requested_at <= w.event_time <= case.audit_at
+                            for w in worker.get(r, []))
+                ]
+                if len(strong) != 1:
+                    continue
+                known[cid] = strong[0]
+                part.strong[strong[0]].discard(part.subject_of[cid])
+                part.held.pop(cid, None)
+                part.open_cases[cid] = (case, part.subject_of[cid])
+            return part
+
+        identity._partition = hidden
+        try:
+            result = JointActivityAttribution.build(
+                every, ctx.closure, ctx.store, ctx.lineage, event_type="ANONYMIZE_RECORD",
+                target_system="analytics_platform", clock=clock, anchors=anchors,
+            )
+        finally:
+            identity._partition = real
+        for cid, rid in known.items():
+            got = result.assigned.get(cid)
+            tally["correct" if got and got.resource_id == rid else "wrong" if got else "abstained"] += 1
+    print(f"analytics hide-and-link (clock learned on the other parity): {dict(tally)}")
+
+
 def main() -> int:
     load_dotenv(paths.ENV_FILE)
     ctx = build_context(RunMode.DETERMINISTIC)
@@ -106,6 +160,7 @@ def main() -> int:
     print("\n".join(ctx.clock.describe()))
     held_out(ctx, test, runs)
     hide_and_force(ctx, test, runs)
+    hide_analytics(ctx, test)
     return 0
 
 

@@ -7,7 +7,7 @@ python code/main.py --mode deterministic --split all
 python code/evaluation/score.py --diff
 ```
 
-Current (iteration 20): step P 1.000 / R 0.953 / F1 0.976, status 32/32, evidence 184/184 on matched steps, 23/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
+Current (iteration 21): step P 1.000 / R 0.984 / F1 0.992, status 32/32, evidence 190/190 on matched steps, 29/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
 
 Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` is written by `--mode replay` from the cache of the last live run (`code/.cache/llm/`): iterations 15 to 19 added no model call, so replay has zero cache misses, and the sample skeptic replays 60 of 60 calls. A confirming `--mode live` run after these iterations is still to be done; it should make 0 provider calls. Model stages: screenshot perception, LLM intake, the category fallback, and the skeptic on the samples. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row (case_45) and scores the same on samples.
 
@@ -41,6 +41,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 18 | Nearest-row tie-breaker (`activity_ranked`) | Experiment reversing "never break ties by time": for requests with no account, the feasible row nearest `reported_at`, one global pass (largest rank-1/rank-2 margin first, exclusivity kept), adding only the account VERIFY step (verdict changes asserted 0). Validation on forced picks (`code/tools/rank_validation.py`, no gold): rank 1 = forced pick 129/133 (0.970), but only 23 had 2+ feasible rows: 22/23 | 0.978 / 0.938 / 0.958 | 32/32 (1.000) | n/a | Reverted: F1 fell; 2 of 6 sample picks correct (cases 18, 32); test would gain 135 account steps, 0 verdict changes |
 | 19 | Support message vs attachment by content | 8 test support records whose names point to both SUPPORT_MESSAGE and SUPPORT_ATTACHMENT were decided by name order. Now `category.support_by_content`: shared order/agent context (rule_05) -> MESSAGE, else file attributes (rule_06) -> ATTACHMENT, neither -> MESSAGE (reversible) and flagged | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (2 test rows: case_131, case_179 REDACT -> DELETE; 0 verdict flips) |
 | 20 | Run clock + matching for account rows | The deletion worker's rows of one run share a clock: the account row sits in a band before `reported_at`, and every later row of the run has an offset from it whose seconds residue depends only on the row template. `runclock.learn` measures band, horizon and residues from the 238 evaluation requests whose account is attributed by identifiers (no gold), and the account pass keeps only candidate rows inside the band and phase-consistent with the case's own identifier-attributed run rows. The remaining ambiguity is resolved only by edges present in every maximum matching of requests to account rows (`identity.forced_by_matching`) | 1.000 / 0.953 / 0.976 | 32/32 (1.000) | 23/32 | Kept (test: +94 account steps in 94 cases, 2 removed, 0 verdict changes) |
+| 21 | Analytics rows through the account row | The same run clock links identifier-less analytics rows: an ANONYMIZE_RECORD analytics row is a candidate for a request with no analytics link by identifiers when it fits the run of that request's account row (template seen in pinned runs, offset inside the template's learned window, learned residue), the resource is not owned by another subject, and propagation leaves it unclaimed by any other request. No result matching. The old unanchored pass stays as the NOT_APPLICABLE fallback (case_04) | 1.000 / 0.984 / 0.992 | 32/32 (1.000) | 29/32 | Kept (test: +53 analytics steps in 53 cases, 0 verdict changes) |
 
 ### Notes per iteration
 
@@ -216,6 +217,28 @@ The 5 h horizon of the plan could be learned from pins: it is 3.5 h. Templates w
 
 **Replay.** The new picks change the sample cases' flags and so the skeptic's cache keys. The sample skeptic was regenerated once with the configured gemini-3.5-flash-lite only (`LLM_PROVIDERS=gemini`, 60 of 60 calls, 28 from the old cache, 15 CONFIRM, 0 changes); `--mode live --split all` then made 0 provider calls and `--mode replay --split all` reproduces `output.csv` and the sample output byte for byte. `test_runclock.py::test_pipeline_never_opens_sample_output_csv` asserts the pipeline never opens `dataset/sample_output.csv`.
 
+### Iteration 21: analytics rows through the account row
+
+**Framing.** As in iteration 20: run membership is detected from the worker's own pinned runs and used only to link activity claims; ownership, exclusivity and `as_of(audit_at)` evidence still govern every step.
+
+**Learned (printed by `main.py`).** Offsets of a pinned run's later rows after its account row, by template, over 348 rows: "Policy action completed" rows 22.5 to 67.8 min (residues 9-11 s mod 30); "final result" rows 84.5 to 179.7 min (residues 20-22 s); connector checks 84.1 to 187.1 min. The windows are disjoint and tight, and the same template means the same timing for every resource type, so a candidate analytics row must match one: this is what separates the competing claimants that blocked the unanchored passes (case_21 and case_23 both fit analytics_5335 by phase alone).
+
+**Validation (no gold).**
+
+| Check | Result |
+|---|---|
+| Analytics hide-and-link: 72 requests whose analytics is attributed by identifiers and has an ANONYMIZE row lose it; clock learned on the other parity only | 64 correct, 0 wrong, 8 abstained |
+| Samples: the 19 gold cases with no analytics step | 0 get one (0 extra steps) |
+| Order independence (3 shuffles, anchored and fallback passes) | identical |
+| Samples | P 1.000 / R 0.984 / F1 0.992 (190 of 193), status 32/32, 0 extra; halves: cases 01-16 74 of 75, cases 17-32 116 of 118 |
+| Test | 53 cases gain `VERIFY_RECORD_ANONYMIZED` (all picks are "Policy action completed" SUCCESS rows, as in the sample misses), 0 verdict changes, nothing removed; analytics steps appear in 25% of deletion cases on test (13 of 32 sample gold cases) |
+
+`python code/tools/clock_spotcheck.py BEFORE AFTER --system analytics_platform` prints raw rows for 10 random picks: every pick has residue 9-11 and an offset of 27-42 min; the other analytics rows near each account row fail the window or the residue (or belong to another subject by identifiers).
+
+**What was not needed.** The planned 2b (a run-template exclusion rule) was not applied: the template windows already separate case_21 from case_23.
+
+**Remaining sample losses: 3** (`audit_record_6645`, `audit_record_5569`, `account_004`), none of which appears in any participant file.
+
 ### Iteration 19: support message vs attachment by content
 
 All 8 conflicting records carry both kinds of evidence, so the rule had to cover "both signals" too (decision: attachment unless the conversation has shared context). Every one has a file record whose uploader is the subject, and a message-side record with no order, agent or other-party context:
@@ -264,13 +287,12 @@ gemini-3.6-flash could not be measured today: its free-tier quota was exhausted 
 
 ## Remaining sample losses (iteration 19)
 
-9 gold steps are still missed and there are no extra steps:
+3 gold steps are still missed and there are no extra steps:
 
-- 6 identifier-less analytics rows (cases 03, 21, 25–28);
 - 2 security audit records that appear in no participant data (`audit_record_6645`, `audit_record_5569`);
 - `account_004` (case_04), which appears in no participant data either.
 
-(Iteration 20 recovered the five contested accounts.)
+(Iteration 20 recovered the five contested accounts, iteration 21 the six identifier-less analytics rows.)
 
 ## Honest limits
 
@@ -278,7 +300,7 @@ What this solution does not do, or does not know, measured where possible.
 
 - **47 of 507 test deletion cases have no account step** (144 before iteration 20). Gold has an account step in 32 of 32 sample cases. 8 have no status-matched row in the band, 6 have exactly one that the phase test, ownership or another request removes, and 33 have two or more that the run clock and the matching rule do not separate. A nearest-to-`reported_at` tie-breaker was measured (iteration 18): only 2 of 6 correct on the real contested sample cases, so it stays out, and the solution abstains.
 - **3 sample gold resources have no participant evidence.** `audit_record_6645`, `audit_record_5569` and `account_004` appear in no participant file under any encoding (iteration 19 search). No evidence-grounded pipeline can produce them, so sample recall tops out below 1.000.
-- **6 identifier-less sample analytics rows are missed.** After anonymization they carry no identifier. A two-sided forced assignment found 0 assignable rows, and analytics results do not follow `reported_status` (iteration 16).
+- **Analytics rows are linked by timing, not identifiers.** After anonymization they carry no identifier, so a pick rests on the run clock (iteration 21) plus ownership and exclusivity. It was 64 correct, 0 wrong on the identifier-linked analytics hidden for validation and added 0 steps on the 19 sample cases without analytics, but test cases without an analytics record cannot be checked. Where the data allows several rows, the solution abstains.
 - **Unmeasured test-only behavior.** The samples never exercise ownership conflicts (87 test picks refused, 0 on samples), support message/attachment conflicts (8 test records, decided by content in iteration 19), or the 116 test security-audit records whose only evidence was captured after `audit_at`. These rules follow the specification, but no gold confirms them.
 - **The skeptic is not a reliable error detector.** In the negative control it caught 0 of 11 planted wrong picks (iteration 13). It is kept as a gated, no-change guard on the samples and skipped on test (budget 0); the check it could not make became deterministic code (iteration 14).
 - **Prompt text is frozen.** The cache keys include the prompt and tool text, so known wording issues (for example, the skeptic prompt says "at most six" tool calls while the code allows 8 turns) are documented in `prompts.md` contracts instead of being edited.
@@ -300,45 +322,33 @@ steps (all six fields), divided by the longer length.
 |---|---|---|
 | Cases | 32 | 8 |
 | Status accuracy | 32/32 (1.000) | 8/8 (1.000) |
-| Steps (gold / predicted / matched) | 193 / 184 / 184 | 34 / 34 / 34 |
-| Step precision / recall / F1 | 1.000 / 0.953 / 0.976 | 1.000 / 1.000 / 1.000 |
-| Field accuracy, positional: phase | 0.953 | 1.000 |
-| Field accuracy, positional: system_id | 0.896 | 1.000 |
-| Field accuracy, positional: resource_id | 0.896 | 1.000 |
-| Field accuracy, positional: operation | 0.896 | 1.000 |
-| Field accuracy, positional: state | 0.896 | 1.000 |
-| Field accuracy, positional: evidence_id | 0.948 | 1.000 |
-| Step-aligned pairs | 184 | 34 |
+| Steps (gold / predicted / matched) | 193 / 190 / 190 | 34 / 34 / 34 |
+| Step precision / recall / F1 | 1.000 / 0.984 / 0.992 | 1.000 / 1.000 / 1.000 |
+| Field accuracy, positional: phase | 0.984 | 1.000 |
+| Field accuracy, positional: system_id | 0.959 | 1.000 |
+| Field accuracy, positional: resource_id | 0.959 | 1.000 |
+| Field accuracy, positional: operation | 0.959 | 1.000 |
+| Field accuracy, positional: state | 0.959 | 1.000 |
+| Field accuracy, positional: evidence_id | 0.979 | 1.000 |
+| Step-aligned pairs | 190 | 34 |
 | Field accuracy, step-aligned: phase | 1.000 | 1.000 |
 | Field accuracy, step-aligned: system_id | 1.000 | 1.000 |
 | Field accuracy, step-aligned: resource_id | 1.000 | 1.000 |
 | Field accuracy, step-aligned: operation | 1.000 | 1.000 |
 | Field accuracy, step-aligned: state | 1.000 | 1.000 |
 | Field accuracy, step-aligned: evidence_id | 1.000 | 1.000 |
-| Sequence accuracy (exact ordered steps) | 23/32 (0.719) | 8/8 (1.000) |
-| Mean normalized edit distance | 0.069 | 0.000 |
+| Sequence accuracy (exact ordered steps) | 29/32 (0.906) | 8/8 (1.000) |
+| Mean normalized edit distance | 0.022 | 0.000 |
 
 ### Per-case diff: samples
 
 ```text
-case_03: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
-    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_9406 ANONYMIZED ev=evidence_94
 case_04: gold COMPLETE / pred COMPLETE, matched 1/2, extra 0
     - VERI VERIFY_RECORD_ABSENT       account_service/account_004 ABSENT ev=evidence_54
 case_18: gold INCOMPLETE / pred INCOMPLETE, matched 13/14, extra 0
     - VERI VERIFY_RECORD_PRESENT      security_service/audit_record_6645 PRESENT ev=-
 case_20: gold INCOMPLETE / pred INCOMPLETE, matched 7/8, extra 0
     - VERI VERIFY_RECORD_PRESENT      security_service/audit_record_5569 PRESENT ev=-
-case_21: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
-    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_5335 ANONYMIZED ev=evidence_92
-case_25: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
-    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_1895 ANONYMIZED ev=evidence_92
-case_26: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
-    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_4566 ANONYMIZED ev=evidence_92
-case_27: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
-    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_4574 ANONYMIZED ev=evidence_92
-case_28: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
-    - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_6077 ANONYMIZED ev=evidence_92
 ```
 
 ### Per-case diff: custom overlays

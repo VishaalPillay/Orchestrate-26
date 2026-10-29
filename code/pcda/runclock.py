@@ -48,6 +48,8 @@ class RunClock:
     horizon: timedelta  # latest observed (later run row - account row), rounded up
     residues: dict[str, frozenset[int]]  # template -> observed offset residues (seconds mod `period_s`)
     period_s: int = BASE_PERIOD_S
+    # template -> (earliest, latest) offset of a later run row after the account row, over pinned runs
+    windows: dict[str, tuple[timedelta, timedelta]] = field(default_factory=dict)
     pins: int = 0
     pairs: int = 0
     delta_hist: dict[int, int] = field(default_factory=dict)  # 30-minute bin -> pairs
@@ -65,6 +67,19 @@ class RunClock:
                     return False
         return True
 
+    def fits(self, anchor: Claim, row: Claim) -> bool:
+        """True when `row` could belong to the run whose account row is `anchor`.
+
+        Its template must have been seen in pinned runs, with the row's offset
+        inside that template's learned window and on its learned residue.
+        """
+        d = row.event_time - anchor.event_time
+        key = template(row.details)
+        window = self.windows.get(key)
+        if window is None or not window[0] <= d <= window[1]:
+            return False
+        return int(d.total_seconds()) % self.period_s in self.residues[key]
+
     def describe(self) -> list[str]:
         mins = lambda t: f"{t.total_seconds() / 60:+.1f}"  # noqa: E731
         lines = [
@@ -73,7 +88,12 @@ class RunClock:
             f"  horizon: {self.horizon.total_seconds() / 3600:.1f} h after the account row "
             f"(rows per 30-min bin: {dict(sorted(self.delta_hist.items()))})",
         ]
-        lines += [f"  residues mod {self.period_s} s  {t[:56]:<56} {sorted(r)}" for t, r in sorted(self.residues.items())]
+        for t, r in sorted(self.residues.items()):
+            lo, hi = self.windows[t]
+            lines.append(
+                f"  {t[:56]:<56} residues mod {self.period_s} s {sorted(r)}; "
+                f"window {lo.total_seconds() / 60:.1f} .. {hi.total_seconds() / 60:.1f} min after the account row"
+            )
         return lines
 
 
@@ -122,6 +142,26 @@ def pinned_runs(
     return out
 
 
+def account_anchors(
+    cases: list[CaseRequest],
+    closure: IdentityClosure,
+    store: FactStore,
+    lineage: LineageGraph,
+    account_picks: dict[str, str],
+) -> dict[str, Claim]:
+    """case_id -> the account DELETE row of the case's run: its identifier pin, else its joint account pick.
+
+    `account_picks` maps case_id to the activity id the account joint pass cited.
+    """
+    by_id = {c.activity_id: c for c in lineage.claims}
+    pins = {case.case_id: anchor for case, anchor, _ in pinned_runs(cases, closure, store, lineage)}
+    out = dict(pins)
+    for cid, activity_id in account_picks.items():
+        if cid not in out and activity_id in by_id:
+            out[cid] = by_id[activity_id]
+    return out
+
+
 def learn(cases: list[CaseRequest], closure: IdentityClosure, store: FactStore, lineage: LineageGraph) -> RunClock | None:
     """The clock measured on `cases` (the evaluation requests); None when there is no pinned run."""
     runs = pinned_runs(cases, closure, store, lineage)
@@ -138,10 +178,25 @@ def learn(cases: list[CaseRequest], closure: IdentityClosure, store: FactStore, 
     usable = {t: c for t, c in seen.items() if sum(c.values()) >= MIN_TEMPLATE_PAIRS}
     period = _period(usable)
     residues = {t: frozenset(r % period for r in c) for t, c in usable.items()}
+    windows: dict[str, tuple[timedelta, timedelta]] = {}
+    for t in usable:
+        ds = [d for d, r in deltas if template(r.details) == t]
+        pad = (max(ds) - min(ds)) / len(ds)  # as for the band: one mean spacing
+        windows[t] = (min(ds) - pad, max(ds) + pad)
     hist = Counter(int(d // HORIZON_STEP) for d, _ in deltas)
     # The sample extremes sit about one mean spacing (range / n) inside the true edges; widen by that.
     pad = (max(offsets) - min(offsets)) / len(offsets)
-    return RunClock(min(offsets) - pad, max(offsets) + pad, horizon, residues, period, len(runs), len(deltas), dict(hist))
+    return RunClock(
+        min(offsets) - pad,
+        max(offsets) + pad,
+        horizon,
+        residues,
+        period_s=period,
+        windows=windows,
+        pins=len(runs),
+        pairs=len(deltas),
+        delta_hist=dict(hist),
+    )
 
 
 def _period(seen: dict[str, Counter[int]]) -> int:

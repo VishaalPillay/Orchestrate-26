@@ -709,6 +709,7 @@ class JointActivityAttribution:
         event_type: str = "DELETE_RECORD",
         target_system: str = ACCOUNT_SYSTEM,
         clock: RunClock | None = None,
+        anchors: dict[str, Claim] | None = None,
     ) -> JointActivityAttribution:
         """Accounts use DELETE_RECORD on account_service; analytics rows ANONYMIZE_RECORD on analytics_platform."""
         rows = [
@@ -738,6 +739,19 @@ class JointActivityAttribution:
             resource_of.update({e: pick.resource_id for e in ids})
             cands[cid] = ids
         for cid, (case, user) in part.open_cases.items():
+            if clock is not None and anchors is not None:
+                # Anchored on the case's account row: only rows that fit its run, and no result matching
+                # (analytics results do not follow reported_status, iteration 16).
+                anchor = anchors.get(cid)
+                cands[cid] = frozenset(
+                    c.activity_id
+                    for c in rows
+                    if anchor is not None
+                    and case.requested_at <= c.event_time <= case.audit_at
+                    and clock.fits(anchor, c)
+                    and not owned_elsewhere(c.resource_id, user)
+                )
+                continue
             until = min(case.reported_at, case.audit_at)
             want = REPORTED_STATUS_RESULT.get(case.reported_status)
             run_rows = [r for rid in sorted(part.identified[cid]) for r in worker_rows.get(rid, [])]
@@ -750,14 +764,16 @@ class JointActivityAttribution:
                 and (clock is None or (clock.in_band(c, case) and clock.consistent(c, run_rows)))
             )
         result = propagate(cands, resource_of, part.subject_of)
-        if clock is not None:
+        if clock is not None and anchors is None:
             result = cls._propagate_with_matching(cands, resource_of, part.subject_of, result)
         refused_holds = {
             cid: (part.held[cid].resource_id, result.refused[cid])
             for cid in sorted(part.held)
             if cid in result.refused and cands[cid]
         }
-        assigned, rejected = cls._assignments(part, result, cands, resource_of, claim_by_id, event_type, target_system)
+        assigned, rejected = cls._assignments(
+            part, result, cands, resource_of, claim_by_id, event_type, target_system, anchored=anchors is not None
+        )
         return cls(assigned, rejected, refused_holds)
 
     @staticmethod
@@ -790,6 +806,7 @@ class JointActivityAttribution:
         claim_by_id: dict[str, Claim],
         event_type: str,
         target_system: str,
+        anchored: bool = False,
     ) -> tuple[dict[str, AttributedResource], dict[str, str]]:
         """The assigned open requests as attributions, citing the latest feasible row; the rest with why."""
         assigned: dict[str, AttributedResource] = {}
@@ -810,9 +827,16 @@ class JointActivityAttribution:
                 tier=LinkTier.ACTIVITY_JOINT,
                 # Wording unchanged since iteration 5: the skeptic's cache keys include it.
                 reasons=(
-                    f"activity_joint: {c.activity_id} deletion_worker {event_type} {c.reported_result} "
-                    f"{(c.event_time - case.reported_at).total_seconds() / 60:+.1f} min from reported_at, "
-                    f"consistent with reported_status {case.reported_status}; sole remaining candidate",
+                    (
+                        f"activity_run: {c.activity_id} deletion_worker {event_type} {c.reported_result} "
+                        f"fits the run of the case's account row (window and phase); sole remaining candidate",
+                    )
+                    if anchored
+                    else (
+                        f"activity_joint: {c.activity_id} deletion_worker {event_type} {c.reported_result} "
+                        f"{(c.event_time - case.reported_at).total_seconds() / 60:+.1f} min from reported_at, "
+                        f"consistent with reported_status {case.reported_status}; sole remaining candidate",
+                    )
                 ),
                 evidence_ids=(c.activity_id,),
                 needs_skeptic=True,
