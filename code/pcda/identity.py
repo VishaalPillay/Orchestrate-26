@@ -21,12 +21,15 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import IntEnum
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pcda import config
 from pcda.cases import CaseRequest
 from pcda.facts import ATTR_LINKED, ATTR_SRC, ATTR_TABLE, Fact, FactKind, FactStore
 from pcda.lineage import Claim, LineageGraph
+
+if TYPE_CHECKING:
+    from pcda.runclock import RunClock
 
 _EMAIL_RE: Final = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _HASH_RE: Final = re.compile(r"^[0-9a-f]{64}$")
@@ -527,6 +530,8 @@ ACCOUNT_SYSTEM: Final = "account_service"
 class Propagation:
     assigned: dict[str, str]  # case_id -> resource_id
     refused: dict[str, str]  # case_id -> why nothing was assigned
+    # case_id -> resources still feasible when the propagation stopped (requests it neither assigned nor emptied)
+    remaining: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 def propagate(
@@ -575,9 +580,58 @@ def propagate(
             for other in live:
                 if other not in cids and subject_of[other] not in keep:
                     live[other] = {r for r in live[other] if resource_of[r] != rid}
+    remaining = {cid: frozenset(resources(cid)) for cid in sorted(set(live) - done) if live[cid]}
     for cid in sorted(set(live) - done):
         refused[cid] = f"{len(resources(cid))} candidate rows remain"
-    return Propagation(dict(sorted(assigned.items())), dict(sorted(refused.items())))
+    return Propagation(dict(sorted(assigned.items())), dict(sorted(refused.items())), remaining)
+
+
+def forced_by_matching(remaining: dict[str, frozenset[str]]) -> dict[str, str]:
+    """Request -> resource for every edge that lies in *every* maximum matching of requests to resources.
+
+    A record serves one request and every request here has one account row, so a
+    full assignment is a matching. An edge of one maximum matching is forced when
+    removing it leaves no matching of the same size: no alternating path from a
+    free request reaches a free resource without it. Edges outside the matching
+    are never forced. Only what the whole graph proves is returned; nothing is
+    broken by time or by taste.
+    """
+    adj = {c: sorted(rs) for c, rs in sorted(remaining.items())}
+    match_r: dict[str, str] = {}  # resource -> request
+    match_c: dict[str, str] = {}  # request -> resource
+
+    def augment(c: str, seen: set[str]) -> bool:
+        for r in adj[c]:
+            if r in seen:
+                continue
+            seen.add(r)
+            if r not in match_r or augment(match_r[r], seen):
+                match_r[r], match_c[c] = c, r
+                return True
+        return False
+
+    for c in adj:
+        augment(c, set())
+
+    def replaceable(c0: str, r0: str) -> bool:
+        """Is there still a maximum matching without the edge (c0, r0)?"""
+        free = [c for c in adj if c not in match_c or c == c0]
+        seen_c = set(free)
+        queue = list(free)
+        while queue:
+            c = queue.pop()
+            for r in adj[c]:
+                if c == c0 and r == r0:
+                    continue
+                if r not in match_r or r == r0:
+                    return True
+                nxt = match_r[r]
+                if nxt not in seen_c:
+                    seen_c.add(nxt)
+                    queue.append(nxt)
+        return False
+
+    return {c: r for c, r in sorted(match_c.items()) if not replaceable(c, r)}
 
 
 @dataclass
@@ -588,20 +642,21 @@ class _Partition:
     held: dict[str, AttributedResource]  # case_id -> activity_temporal pick
     open_cases: dict[str, tuple[CaseRequest, str]]  # case_id -> (case, subject), nothing on the system
     subject_of: dict[str, str]  # case_id -> subject, every resolved request
+    identified: dict[str, frozenset[str]]  # case_id -> resources attributed by identifiers, any system
 
 
 def _partition(
     cases: list[CaseRequest], closure: IdentityClosure, store: FactStore, lineage: LineageGraph, target_system: str
 ) -> _Partition:
-    part = _Partition(defaultdict(set), {}, {}, {})
+    part = _Partition(defaultdict(set), {}, {}, {}, {})
     for case in cases:
         user = closure.subject_of(case.email)
         if user is None:
             continue
         part.subject_of[case.case_id] = user
-        found = [
-            a for a in ResourceAttribution.for_case(case, user, closure, store, lineage) if a.system_id == target_system
-        ]
+        attributed = ResourceAttribution.for_case(case, user, closure, store, lineage)
+        part.identified[case.case_id] = frozenset(a.resource_id for a in attributed if not a.needs_skeptic)
+        found = [a for a in attributed if a.system_id == target_system]
         for a in found:
             if not a.needs_skeptic:
                 part.strong[a.resource_id].add(user)
@@ -653,6 +708,7 @@ class JointActivityAttribution:
         *,
         event_type: str = "DELETE_RECORD",
         target_system: str = ACCOUNT_SYSTEM,
+        clock: RunClock | None = None,
     ) -> JointActivityAttribution:
         """Accounts use DELETE_RECORD on account_service; analytics rows ANONYMIZE_RECORD on analytics_platform."""
         rows = [
@@ -672,6 +728,10 @@ class JointActivityAttribution:
             return conflict_cache[rid, user]
 
         resource_of = {c.activity_id: c.resource_id for c in rows}
+        worker_rows: dict[str, list[Claim]] = defaultdict(list)
+        for c in lineage.claims:
+            if c.source_system == "deletion_worker":
+                worker_rows[c.resource_id].append(c)
         cands: dict[str, frozenset[str]] = {}
         for cid, pick in part.held.items():
             ids = frozenset(e for e in pick.evidence_ids if e in claim_by_id)
@@ -680,14 +740,18 @@ class JointActivityAttribution:
         for cid, (case, user) in part.open_cases.items():
             until = min(case.reported_at, case.audit_at)
             want = REPORTED_STATUS_RESULT.get(case.reported_status)
+            run_rows = [r for rid in sorted(part.identified[cid]) for r in worker_rows.get(rid, [])]
             cands[cid] = frozenset(
                 c.activity_id
                 for c in rows
                 if case.requested_at <= c.event_time <= until
                 and c.reported_result == want
                 and not owned_elsewhere(c.resource_id, user)
+                and (clock is None or (clock.in_band(c, case) and clock.consistent(c, run_rows)))
             )
         result = propagate(cands, resource_of, part.subject_of)
+        if clock is not None:
+            result = cls._propagate_with_matching(cands, resource_of, part.subject_of, result)
         refused_holds = {
             cid: (part.held[cid].resource_id, result.refused[cid])
             for cid in sorted(part.held)
@@ -695,6 +759,27 @@ class JointActivityAttribution:
         }
         assigned, rejected = cls._assignments(part, result, cands, resource_of, claim_by_id, event_type, target_system)
         return cls(assigned, rejected, refused_holds)
+
+    @staticmethod
+    def _propagate_with_matching(
+        cands: dict[str, frozenset[str]],
+        resource_of: dict[str, str],
+        subject_of: dict[str, str],
+        result: Propagation,
+    ) -> Propagation:
+        """Add the edges every maximum matching contains, then propagate again, to a fixpoint.
+
+        A forced edge narrows its request to that resource's rows; propagation then
+        removes the resource from everyone else, which can force further edges.
+        """
+        cands = dict(cands)
+        while True:
+            forced = forced_by_matching(result.remaining)
+            if not forced:
+                return result
+            for cid, rid in forced.items():
+                cands[cid] = frozenset(r for r in cands[cid] if resource_of[r] == rid)
+            result = propagate(cands, resource_of, subject_of)
 
     @staticmethod
     def _assignments(

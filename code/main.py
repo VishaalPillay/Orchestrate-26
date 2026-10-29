@@ -164,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
             skeptic_runs = run_skeptic(ctx, to_run, budgets)
             print_skeptic_summary(skeptic_runs)
         print_canonical_systems(ctx)
+        if ctx.clock is not None:
+            print(chr(10).join(ctx.clock.describe()))
         selected: list[CaseRequest] = []
         for source in split_sources(args.split):
             cases = load_requests(source)

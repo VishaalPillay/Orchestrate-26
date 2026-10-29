@@ -42,7 +42,8 @@ def main() -> int:
     for event_type, system, fallback_only in JOINT_PASSES:
         def build(cases: list, event_type: str = event_type, system: str = system) -> JointActivityAttribution:
             return JointActivityAttribution.build(
-                cases, ctx.closure, ctx.store, ctx.lineage, event_type=event_type, target_system=system
+                cases, ctx.closure, ctx.store, ctx.lineage, event_type=event_type, target_system=system,
+                clock=ctx.clock if system == "account_service" else None,
             )
         base = snapshot(build(every))
         print(f"{system}{' (fallback only)' if fallback_only else ''}: assigned {len(base[0])}, "

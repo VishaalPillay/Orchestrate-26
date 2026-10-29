@@ -7,6 +7,7 @@ a fixed sequence of stage calls with no framework in between:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, replace
 
 from pcda import paths
@@ -32,6 +33,7 @@ from pcda.llm.client import LLMClient, RunMode, build_client
 from pcda.llm.ledger import TokenLedger
 from pcda.planner import Step, order_steps, project
 from pcda.policy import ObligationTemplate, compile_rules
+from pcda.runclock import RunClock, learn
 from pcda.solver import Certificate, ObligationStatus, Verdict, solve
 
 # Activity rows that may link a resource to a request when nothing else does.
@@ -47,6 +49,8 @@ JOINT_PASSES: tuple[tuple[str, str, bool], ...] = (
     ("DELETE_RECORD", "account_service", False),
     ("ANONYMIZE_RECORD", "analytics_platform", True),
 )
+# Account rows are linked with the learned run clock (band, phase) and the matching rule; env switch for ablations.
+USE_RUN_CLOCK = os.environ.get("PCDA_NO_RUN_CLOCK") != "1"
 FALLBACK_FLAG = "fallback_no_provable_obligation"
 
 
@@ -74,6 +78,8 @@ class Context:
     shared_picks: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # One joint pass per (event_type, target_system); see JOINT_PASSES.
     joint: tuple[JointActivityAttribution, ...] = ()
+    # The deletion worker's run clock, learned from the evaluation requests' identifier-pinned runs.
+    clock: RunClock | None = None
     report: IngestReport = field(default_factory=IngestReport)
 
 
@@ -107,8 +113,12 @@ def build_context(mode: RunMode) -> Context:
         # Fixed batches over all 550 requests: one cache key set for every split.
         llm_intake = LLMIntakeAgent(llm)
         llm_intake.prepare([(c.case_id, c.request_text) for c in every_case])
+    # Learned from identifier-pinned runs of the evaluation requests only (never sample_output.csv).
+    clock = learn(load_requests(paths.DELETION_REQUESTS), closure, store, lineage) if USE_RUN_CLOCK else None
     joint = tuple(
-        JointActivityAttribution.build(every_case, closure, store, lineage, event_type=e, target_system=t)
+        JointActivityAttribution.build(
+            every_case, closure, store, lineage, event_type=e, target_system=t, clock=clock if t == "account_service" else None
+        )
         for e, t, _ in JOINT_PASSES
     )
     shared_picks = find_shared_picks(every_case, closure, store, lineage, joint)
@@ -129,6 +139,7 @@ def build_context(mode: RunMode) -> Context:
         skeptic=NullSkepticAgent(),
         canonical=lineage.canonical_systems(),
         joint=joint,
+        clock=clock,
         shared_picks=shared_picks,
         report=report,
     )

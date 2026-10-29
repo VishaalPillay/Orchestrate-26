@@ -7,7 +7,7 @@ python code/main.py --mode deterministic --split all
 python code/evaluation/score.py --diff
 ```
 
-Current (iteration 19): step P 1.000 / R 0.927 / F1 0.962, status 32/32, evidence 179/179 on matched steps, 20/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
+Current (iteration 20): step P 1.000 / R 0.953 / F1 0.976, status 32/32, evidence 184/184 on matched steps, 23/32 exact sequences. Evaluation set: 518 rows pass the validator (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE, of which 10 come from intake and 1 is a fallback).
 
 Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` is written by `--mode replay` from the cache of the last live run (`code/.cache/llm/`): iterations 15 to 19 added no model call, so replay has zero cache misses, and the sample skeptic replays 60 of 60 calls. A confirming `--mode live` run after these iterations is still to be done; it should make 0 provider calls. Model stages: screenshot perception, LLM intake, the category fallback, and the skeptic on the samples. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row (case_45) and scores the same on samples.
 
@@ -40,6 +40,7 @@ Iterations 1–3 came before the solver existed, so they have no step-level or s
 | 17 | Test-side leak audit + stable user_id | `code/tools/leak_audit.py` (every flag and silent rejection by type, test vs samples) and `code/tools/invariants.py` (citation, shared resources, account verification, audit-record retention, per-system shares). One generic fix: the staleness gate no longer rejects a candidate matched on the subject's own `user_id`, which is never reassigned (the gate exists for recycled emails and phones, the case_17 decoy) | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (1 test row: case_34 gains VERIFY_RECORD_PRESENT `audit_record_3753`) |
 | 18 | Nearest-row tie-breaker (`activity_ranked`) | Experiment reversing "never break ties by time": for requests with no account, the feasible row nearest `reported_at`, one global pass (largest rank-1/rank-2 margin first, exclusivity kept), adding only the account VERIFY step (verdict changes asserted 0). Validation on forced picks (`code/tools/rank_validation.py`, no gold): rank 1 = forced pick 129/133 (0.970), but only 23 had 2+ feasible rows: 22/23 | 0.978 / 0.938 / 0.958 | 32/32 (1.000) | n/a | Reverted: F1 fell; 2 of 6 sample picks correct (cases 18, 32); test would gain 135 account steps, 0 verdict changes |
 | 19 | Support message vs attachment by content | 8 test support records whose names point to both SUPPORT_MESSAGE and SUPPORT_ATTACHMENT were decided by name order. Now `category.support_by_content`: shared order/agent context (rule_05) -> MESSAGE, else file attributes (rule_06) -> ATTACHMENT, neither -> MESSAGE (reversible) and flagged | 1.000 / 0.927 / 0.962 | 32/32 (1.000) | 20/32 | Kept (2 test rows: case_131, case_179 REDACT -> DELETE; 0 verdict flips) |
+| 20 | Run clock + matching for account rows | The deletion worker's rows of one run share a clock: the account row sits in a band before `reported_at`, and every later row of the run has an offset from it whose seconds residue depends only on the row template. `runclock.learn` measures band, horizon and residues from the 238 evaluation requests whose account is attributed by identifiers (no gold), and the account pass keeps only candidate rows inside the band and phase-consistent with the case's own identifier-attributed run rows. The remaining ambiguity is resolved only by edges present in every maximum matching of requests to account rows (`identity.forced_by_matching`) | 1.000 / 0.953 / 0.976 | 32/32 (1.000) | 23/32 | Kept (test: +94 account steps in 94 cases, 2 removed, 0 verdict changes) |
 
 ### Notes per iteration
 
@@ -186,6 +187,35 @@ The bar was at least 90% agreement on cases whose answer is already known, then 
 
 Applied to the 6 sample requests that end with no account, it picked 2 correctly (case_18 `account_5521`, case_32 `account_8858`). It missed case_23 (`account_9155` for gold `account_410`), swapped case_28 and case_29 (`account_7012` and `account_5482` are exactly each other's gold), and gave case_04 `account_5661` (gold `account_004` is in no participant file). Step P/R/F1 went 1.000/0.927/0.962 -> 0.978/0.938/0.958. On test it would add 135 VERIFY_RECORD_ABSENT steps with 0 verdict changes. The validation set overstates accuracy because 110 of its 133 cases had a single feasible row, so agreement there is automatic. The real contested cases have several rows close in time, and there the rule is near chance (2/6). Abstaining stays the decision.
 
+### Iteration 20: run clock and matching
+
+**Framing.** Run membership is detected from the worker's own pinned runs (requests whose account is attributed by identifiers), and is used only to link activity claims to a request. It never decides a state: every step it adds is still checked by exclusivity, ownership and `as_of(audit_at)` evidence.
+
+**What the raw rows show.** 539 deletion_worker account DELETE rows against 550 requests (by result: SUCCESS 270, PARTIAL 158, FAILED 111; by `reported_status`: COMPLETE 271, PARTIALLY_COMPLETE 157, NOT_STARTED 122, of which 10 are non-deletion requests), and every row is feasible for at least one request, so rows and requests are close to one to one and the "rows of people outside the dataset" reading was wrong. Learned on the 238 identifier-pinned evaluation runs (`run_log` of `main.py` prints it):
+
+| Learned | Value | Distribution |
+|---|---|---|
+| Band of the account row | -75.0 .. -43.9 min from `reported_at` | extremes -74.9 / -44.0 min, padded by range / n = 0.13 min |
+| Horizon of the run | 3.5 h after the account row | rows per 30-min bin: 0: 5, 1: 51, 2: 16, 3: 113, 4: 117, 5: 44, 6: 2; none beyond 3.1 h |
+| Residue (seconds mod 30; folded because every residue's +30 s partner was observed for 90%+ of pairs) | 20-22 s for "final result", connector and restore rows; 9-11 s for "Policy action completed" rows | 348 later run rows; 0 exceptions |
+
+The 5 h horizon of the plan could be learned from pins: it is 3.5 h. Templates with fewer than 30 pinned pairs (restore checks, 9 pairs) are left unconstrained.
+
+**Validation (no gold).** `python code/tools/clock_validation.py`:
+
+| Check | Result |
+|---|---|
+| Clock learned on even-numbered pinned runs, checked on odd (and the reverse) | true row rejected 0 of 238; other status-matched rows that also pass (0 / 1 / 2 / 3+): 101 / 29 / 5 / 0 and 85 / 16 / 2 / 0 |
+| Earlier variants of the same check | no band padding: 2 rejections (band edges); minimum 3 pairs per template with residues mod 60: 8 rejections; these are why the band is padded and the residue period is folded |
+| Hide-and-force: every pinned request loses its identifier-attributed account, the real pass runs | 235 correct, 0 wrong, 3 abstained of 238 |
+| Order independence (`joint_order_check.py`, 3 shuffles) | identical |
+
+**Samples.** Step P / R / F1 1.000 / 0.953 / 0.976 (184 of 193), 0 extra steps, status 32/32. The five contested accounts (cases 18, 23, 28, 29, 32) are now matched and all five are right. Halves: cases 01-16 73 of 75 (unchanged), cases 17-32 111 of 118 (was 106). The one account still missing is `account_004`, which is in no participant file.
+
+**Test.** 96 rows change against the previous `output.csv`: 94 gain `VERIFY_RECORD_ABSENT` on an account (accounts without a step: 144 to 47 of 507 deletion cases), 2 lose theirs (case_45, whose pick was 35 h before `reported_at`, and case_493, 131 min before): no row in the band is phase-consistent, so the solution now abstains. 0 verdict changes. Invariant 3 (INCOMPLETE case without an account verification): 102 to 31 (98 to 28 on test). `python code/tools/clock_spotcheck.py` prints raw rows for 10 random new accounts: nine are decided by the phase test (every other in-band row is phase-inconsistent), one (case_395) by the matching rule (the other two in-band rows are held by cases 396 and 397). Of the 47 cases still without an account, counting status-matched rows in the band before the phase test: 8 have none, 6 have exactly one (removed by the phase test, by ownership or because another request holds it) and 33 have two or more. 36 carry `joint_none` with `N candidate rows remain` or `also the only candidate of …`.
+
+**Replay.** The new picks change the sample cases' flags and so the skeptic's cache keys. The sample skeptic was regenerated once with the configured gemini-3.5-flash-lite only (`LLM_PROVIDERS=gemini`, 60 of 60 calls, 28 from the old cache, 15 CONFIRM, 0 changes); `--mode live --split all` then made 0 provider calls and `--mode replay --split all` reproduces `output.csv` and the sample output byte for byte. `test_runclock.py::test_pipeline_never_opens_sample_output_csv` asserts the pipeline never opens `dataset/sample_output.csv`.
+
 ### Iteration 19: support message vs attachment by content
 
 All 8 conflicting records carry both kinds of evidence, so the rule had to cover "both signals" too (decision: attachment unless the conversation has shared context). Every one has a file record whose uploader is the subject, and a message-side record with no order, agent or other-party context:
@@ -234,18 +264,19 @@ gemini-3.6-flash could not be measured today: its free-tier quota was exhausted 
 
 ## Remaining sample losses (iteration 19)
 
-14 gold steps are still missed and there are no extra steps:
+9 gold steps are still missed and there are no extra steps:
 
 - 6 identifier-less analytics rows (cases 03, 21, 25–28);
-- 5 accounts still contested in their time window (cases 18, 23, 28, 29, 32);
 - 2 security audit records that appear in no participant data (`audit_record_6645`, `audit_record_5569`);
 - `account_004` (case_04), which appears in no participant data either.
+
+(Iteration 20 recovered the five contested accounts.)
 
 ## Honest limits
 
 What this solution does not do, or does not know, measured where possible.
 
-- **144 of 507 test deletion cases have no account step.** Gold has an account step in 32 of 32 sample cases. For these cases no deletion_worker row is forced: each keeps 2 or more feasible rows after every constraint (iteration 15), and some of those rows belong to people outside the dataset. A nearest-to-`reported_at` tie-breaker was measured (iteration 18): 129/133 agreement on picks the data already forces, but only 2 of 6 correct on the real contested sample cases, so sample F1 fell from 0.962 to 0.958. It was reverted, and the solution abstains: no account step rather than a likely-wrong one.
+- **47 of 507 test deletion cases have no account step** (144 before iteration 20). Gold has an account step in 32 of 32 sample cases. 8 have no status-matched row in the band, 6 have exactly one that the phase test, ownership or another request removes, and 33 have two or more that the run clock and the matching rule do not separate. A nearest-to-`reported_at` tie-breaker was measured (iteration 18): only 2 of 6 correct on the real contested sample cases, so it stays out, and the solution abstains.
 - **3 sample gold resources have no participant evidence.** `audit_record_6645`, `audit_record_5569` and `account_004` appear in no participant file under any encoding (iteration 19 search). No evidence-grounded pipeline can produce them, so sample recall tops out below 1.000.
 - **6 identifier-less sample analytics rows are missed.** After anonymization they carry no identifier. A two-sided forced assignment found 0 assignable rows, and analytics results do not follow `reported_status` (iteration 16).
 - **Unmeasured test-only behavior.** The samples never exercise ownership conflicts (87 test picks refused, 0 on samples), support message/attachment conflicts (8 test records, decided by content in iteration 19), or the 116 test security-audit records whose only evidence was captured after `audit_at`. These rules follow the specification, but no gold confirms them.
@@ -269,23 +300,23 @@ steps (all six fields), divided by the longer length.
 |---|---|---|
 | Cases | 32 | 8 |
 | Status accuracy | 32/32 (1.000) | 8/8 (1.000) |
-| Steps (gold / predicted / matched) | 193 / 179 / 179 | 34 / 34 / 34 |
-| Step precision / recall / F1 | 1.000 / 0.927 / 0.962 | 1.000 / 1.000 / 1.000 |
-| Field accuracy, positional: phase | 0.927 | 1.000 |
-| Field accuracy, positional: system_id | 0.803 | 1.000 |
-| Field accuracy, positional: resource_id | 0.803 | 1.000 |
-| Field accuracy, positional: operation | 0.824 | 1.000 |
-| Field accuracy, positional: state | 0.824 | 1.000 |
-| Field accuracy, positional: evidence_id | 0.922 | 1.000 |
-| Step-aligned pairs | 179 | 34 |
+| Steps (gold / predicted / matched) | 193 / 184 / 184 | 34 / 34 / 34 |
+| Step precision / recall / F1 | 1.000 / 0.953 / 0.976 | 1.000 / 1.000 / 1.000 |
+| Field accuracy, positional: phase | 0.953 | 1.000 |
+| Field accuracy, positional: system_id | 0.896 | 1.000 |
+| Field accuracy, positional: resource_id | 0.896 | 1.000 |
+| Field accuracy, positional: operation | 0.896 | 1.000 |
+| Field accuracy, positional: state | 0.896 | 1.000 |
+| Field accuracy, positional: evidence_id | 0.948 | 1.000 |
+| Step-aligned pairs | 184 | 34 |
 | Field accuracy, step-aligned: phase | 1.000 | 1.000 |
 | Field accuracy, step-aligned: system_id | 1.000 | 1.000 |
 | Field accuracy, step-aligned: resource_id | 1.000 | 1.000 |
 | Field accuracy, step-aligned: operation | 1.000 | 1.000 |
 | Field accuracy, step-aligned: state | 1.000 | 1.000 |
 | Field accuracy, step-aligned: evidence_id | 1.000 | 1.000 |
-| Sequence accuracy (exact ordered steps) | 20/32 (0.625) | 8/8 (1.000) |
-| Mean normalized edit distance | 0.088 | 0.000 |
+| Sequence accuracy (exact ordered steps) | 23/32 (0.719) | 8/8 (1.000) |
+| Mean normalized edit distance | 0.069 | 0.000 |
 
 ### Per-case diff: samples
 
@@ -294,28 +325,20 @@ case_03: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
     - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_9406 ANONYMIZED ev=evidence_94
 case_04: gold COMPLETE / pred COMPLETE, matched 1/2, extra 0
     - VERI VERIFY_RECORD_ABSENT       account_service/account_004 ABSENT ev=evidence_54
-case_18: gold INCOMPLETE / pred INCOMPLETE, matched 12/14, extra 0
-    - VERI VERIFY_RECORD_ABSENT       account_service/account_5521 ABSENT ev=-
+case_18: gold INCOMPLETE / pred INCOMPLETE, matched 13/14, extra 0
     - VERI VERIFY_RECORD_PRESENT      security_service/audit_record_6645 PRESENT ev=-
 case_20: gold INCOMPLETE / pred INCOMPLETE, matched 7/8, extra 0
     - VERI VERIFY_RECORD_PRESENT      security_service/audit_record_5569 PRESENT ev=-
 case_21: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
     - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_5335 ANONYMIZED ev=evidence_92
-case_23: gold INCOMPLETE / pred INCOMPLETE, matched 7/8, extra 0
-    - VERI VERIFY_RECORD_ABSENT       account_service/account_410 ABSENT ev=-
 case_25: gold COMPLETE / pred COMPLETE, matched 2/3, extra 0
     - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_1895 ANONYMIZED ev=evidence_92
 case_26: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
     - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_4566 ANONYMIZED ev=evidence_92
 case_27: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
     - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_4574 ANONYMIZED ev=evidence_92
-case_28: gold COMPLETE / pred COMPLETE, matched 4/6, extra 0
-    - VERI VERIFY_RECORD_ABSENT       account_service/account_5482 ABSENT ev=evidence_92
+case_28: gold COMPLETE / pred COMPLETE, matched 5/6, extra 0
     - VERI VERIFY_RECORD_ANONYMIZED   analytics_platform/analytics_6077 ANONYMIZED ev=evidence_92
-case_29: gold INCOMPLETE / pred INCOMPLETE, matched 13/14, extra 0
-    - VERI VERIFY_RECORD_ABSENT       account_service/account_7012 ABSENT ev=-
-case_32: gold INCOMPLETE / pred INCOMPLETE, matched 4/5, extra 0
-    - VERI VERIFY_RECORD_ABSENT       account_service/account_8858 ABSENT ev=-
 ```
 
 ### Per-case diff: custom overlays
