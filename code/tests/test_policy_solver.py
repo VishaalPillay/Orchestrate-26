@@ -102,6 +102,7 @@ def test_absence_cites_latest_non_vacuous_covering_snapshot() -> None:
     # No fact names account_004, so its category comes from nothing: unknown, flagged.
     assert cert.verdict is Verdict.NOT_APPLICABLE
     assert "category_unknown:account_004" in cert.flags
+    assert "fallback_no_provable_obligation" in cert.flags  # nothing provable: the NOT_APPLICABLE fallback
 
     full = FactStore(list(store) + [fact("ev_old:1", "account_004", FactKind.LINK, "2026-01-01T00:00:00Z",
                                          table="customer_profiles")])
