@@ -127,6 +127,11 @@ class Blast:
     cases_changed: tuple[str, ...]
 
 
+def exceeds_blast_limit(blast: Blast, max_verdicts: int, max_steps: int) -> bool:
+    """True when the skeptic changed more verdicts or steps than may be written without review."""
+    return len(blast.verdict_changes) > max_verdicts or blast.step_changes > max_steps
+
+
 def blast_radius(before: list[CaseResult], after: list[CaseResult]) -> Blast:
     verdicts: list[tuple[str, str, str]] = []
     steps = 0

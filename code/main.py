@@ -22,7 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from pcda import config, paths
-from pcda.agents.skeptic_run import SkepticRun, blast_radius, run_skeptic, write_audit
+from pcda.agents.skeptic_run import SkepticRun, blast_radius, exceeds_blast_limit, run_skeptic, write_audit
 from pcda.cases import SPLIT_NAMES, CaseRequest, load_evidence_times, load_requests, split_sources
 from pcda.contract import OUTPUT_COLUMNS
 from pcda.llm.client import RunMode
@@ -206,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             if (
                 blast is not None
                 and source == paths.DELETION_REQUESTS
-                and (len(blast.verdict_changes) > BLAST_MAX_VERDICTS or blast.step_changes > BLAST_MAX_STEPS)
+                and exceeds_blast_limit(blast, BLAST_MAX_VERDICTS, BLAST_MAX_STEPS)
                 and not args.accept_skeptic_blast_radius
             ):
                 candidate = paths.RUNS_DIR / "skeptic_candidate_output.csv"

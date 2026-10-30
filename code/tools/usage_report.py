@@ -94,9 +94,20 @@ def final_config(e: dict) -> bool:
 
 
 def main() -> int:
-    with (paths.RUNS_DIR / "run_log.jsonl").open(encoding="utf-8") as fh:
+    ledgers = [paths.RUNS_DIR / "run_log.jsonl", paths.RUNS_DIR / "usage_all_live.json"]
+    missing = [p for p in ledgers if not p.exists()]
+    if missing:
+        print(
+            "usage_report: cannot regenerate code/evaluation/usage_report.md; the token ledgers are missing: "
+            + ", ".join(str(p) for p in missing)
+            + ". They are written by live runs under code/.cache/runs/ and are not shipped in code.zip; "
+            "the committed usage_report.md was generated from them.",
+            file=sys.stderr,
+        )
+        return 1
+    with ledgers[0].open(encoding="utf-8") as fh:
         events = [json.loads(line) for line in fh]
-    final = json.loads((paths.RUNS_DIR / "usage_all_live.json").read_text(encoding="utf-8"))
+    final = json.loads(ledgers[1].read_text(encoding="utf-8"))
     out = [
         "# Usage report",
         "",

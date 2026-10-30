@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from pcda.contract import (
+    FINDING_REMEDIATIONS,
     GUARD_OPERATIONS,
     OPERATIONS,
     OUTPUT_COLUMNS,
@@ -23,6 +24,7 @@ from pcda.contract import (
     PHASE_VERIFICATION,
     PHASES,
     RECORD_CHANGE_OPERATIONS,
+    REMEDIATION_VERIFICATION,
     STATUS_COMPLETE,
     STATUS_INCOMPLETE,
     STATUS_NOT_APPLICABLE,
@@ -31,6 +33,8 @@ from pcda.contract import (
     canonical_sort_key,
 )
 from pcda.lineage import LineageGraph
+
+_STRING_FIELDS = ("phase", "system_id", "resource_id", "operation", "state", "evidence_id")
 
 
 @dataclass(frozen=True)
@@ -98,11 +102,16 @@ def validate_row(
             got = sorted(s) if isinstance(s, dict) else type(s).__name__
             bad("step_fields", f"step {i} fields {got}")
             return out
-        if s["step_no"] != i or isinstance(s["step_no"], bool):
+        # Types first, so no lookup below can raise on malformed input (an unhashable operation, say).
+        if type(s["step_no"]) is not int:  # bool and float are not step numbers
+            bad("step_no", f"step {i} step_no {s['step_no']!r} is not an integer")
+        elif s["step_no"] != i:
             bad("step_no", f"step {i} has step_no {s['step_no']!r}")
-        for k in ("phase", "system_id", "resource_id", "operation", "state", "evidence_id"):
-            if not isinstance(s[k], str):
-                bad("field_type", f"step {i} {k} is not a string")
+        mistyped = [k for k in _STRING_FIELDS if not isinstance(s[k], str)]
+        for k in mistyped:
+            bad("field_type", f"step {i} {k} is not a string")
+        if mistyped:
+            continue
         spec = OPERATIONS.get(s["operation"])
         if spec is None:
             bad("operation_enum", f"step {i} operation {s['operation']!r}")
@@ -134,6 +143,13 @@ def validate_row(
     elif status == STATUS_INCOMPLETE:
         if not any(s["phase"] == PHASE_FINDING for s in steps):
             bad("incomplete_has_finding", "INCOMPLETE with no FINDING step")
+        planned = {(s["operation"], s["system_id"], s["resource_id"]) for s in steps}
+        for i, s in enumerate(steps, start=1):
+            on = (s["system_id"], s["resource_id"])
+            if s["operation"] in FINDING_REMEDIATIONS and not any((r, *on) in planned for r in FINDING_REMEDIATIONS[s["operation"]]):
+                bad("finding_has_remediation", f"step {i} {s['operation']} on {on[1]} has no {'/'.join(sorted(FINDING_REMEDIATIONS[s['operation']]))}")
+            if s["operation"] in REMEDIATION_VERIFICATION and (REMEDIATION_VERIFICATION[s["operation"]], *on) not in planned:
+                bad("remediation_has_verification", f"step {i} {s['operation']} on {on[1]} has no {REMEDIATION_VERIFICATION[s['operation']]}")
         for i, s in enumerate(steps, start=1):
             if s["phase"] == PHASE_FINDING and not s["evidence_id"]:
                 bad("finding_cites_evidence", f"step {i} has no evidence_id")

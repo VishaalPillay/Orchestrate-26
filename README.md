@@ -2,7 +2,7 @@
 
 HackerRank Orchestrate (October 2026). For every request in `dataset/deletion_requests.csv` the agent decides whether deletion was actually requested, reconstructs the person's current and historical identifiers, finds every remaining copy and recreation path at `audit_at`, applies `deletion_rules.csv`, and writes `output.csv` (`case_id,deletion_status,steps_json`).
 
-**Principle: the model reads, the code decides.** LLMs do intake, screenshot transcription, a category fallback and an advisory skeptic. They never write a status, a step or a citation: code grounds every observation against the evidence and solves policy obligations deterministically. Design, modules and failure handling are in [`code/ARCHITECTURE.md`](code/ARCHITECTURE.md); the evaluation (accuracy, custom cases, 21-row iteration log, honest limits) is in [`code/evaluation/evaluation_report.md`](code/evaluation/evaluation_report.md); model usage in [`code/evaluation/usage_report.md`](code/evaluation/usage_report.md).
+**Principle: the model reads, the code decides.** LLMs do intake, screenshot transcription, a category fallback and an advisory skeptic. They never write a status, a step or a citation: code grounds every observation against the evidence and solves policy obligations deterministically. Design, modules and failure handling are in [`code/ARCHITECTURE.md`](code/ARCHITECTURE.md); the evaluation (accuracy, custom cases, iteration log, honest limits) is in [`code/evaluation/evaluation_report.md`](code/evaluation/evaluation_report.md); model usage in [`code/evaluation/usage_report.md`](code/evaluation/usage_report.md).
 
 ## Results
 
@@ -51,7 +51,7 @@ Useful commands:
 python code/evaluation/score.py --diff          # samples: status, step P/R/F1, field accuracy, per-case diff
 python code/evaluation/custom_cases.py          # 8 overlay cases
 python code/evaluation/main.py --write          # rewrite the Metrics and Custom sections of the report
-python code/tools/usage_report.py               # rewrite code/evaluation/usage_report.md from the ledger
+python code/tools/usage_report.py               # rewrite code/evaluation/usage_report.md (needs the local ledgers in code/.cache/runs/, which are not shipped in code.zip)
 python code/tools/clock_validation.py           # label-free validation of the run clock and matching rule
 python code/tools/joint_order_check.py          # order independence of the activity linking
 python -m pytest code/tests -q                  # tests

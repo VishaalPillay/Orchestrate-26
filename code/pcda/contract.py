@@ -74,6 +74,24 @@ RECORD_CHANGE_OPERATIONS: Final[frozenset[str]] = frozenset(
 )
 
 
+# A finding is closed by one of these remediations on the same (system_id, resource_id), and a remediation
+# is checked by its verification on the same resource (AGENTS.md section 6.3: an INCOMPLETE case carries the
+# findings, the complete ordered remediation plan, and the checks that must pass after remediation).
+FINDING_REMEDIATIONS: Final[dict[str, frozenset[str]]] = {
+    "REPORT_REMAINING_RECORD": frozenset({"DELETE_RECORD"}),
+    "REPORT_EXPOSED_PII": frozenset({"REDACT_RECORD", "ANONYMIZE_RECORD"}),
+    "REPORT_ACTIVE_DATA_FLOW": frozenset({"DISABLE_DATA_FLOW"}),
+    "REPORT_RESTORE_RISK": frozenset({"BLOCK_RESTORE"}),
+}
+REMEDIATION_VERIFICATION: Final[dict[str, str]] = {
+    "DELETE_RECORD": "VERIFY_RECORD_ABSENT",
+    "REDACT_RECORD": "VERIFY_RECORD_REDACTED",
+    "ANONYMIZE_RECORD": "VERIFY_RECORD_ANONYMIZED",
+    "DISABLE_DATA_FLOW": "VERIFY_DATA_FLOW_DISABLED",
+    "BLOCK_RESTORE": "VERIFY_RESTORE_BLOCKED",
+}
+
+
 def canonical_sort_key(operation: str, system_id: str, resource_id: str) -> tuple[int, str, str]:
     """The single ordering rule for steps_json. Phases follow from operation index."""
     return (OPERATIONS[operation].index, system_id, resource_id)

@@ -79,3 +79,72 @@ def test_incomplete_with_no_steps_is_rejected_unconditionally() -> None:
         with pytest.raises(ContractViolation, match="steps_nonempty"):
             check([row("case_1", status, [])], ["case_1"])
     check([row("case_1", "NOT_APPLICABLE", [])], ["case_1"])  # the only status that may be empty
+
+
+# --- the INCOMPLETE pairing rules and step field types (iteration 24) -----------------------------------------
+
+from pcda.contract import OPERATIONS, canonical_sort_key  # noqa: E402
+
+PAIRINGS = {
+    "REPORT_REMAINING_RECORD": ("DELETE_RECORD", "VERIFY_RECORD_ABSENT"),
+    "REPORT_EXPOSED_PII": ("REDACT_RECORD", "VERIFY_RECORD_REDACTED"),
+    "REPORT_EXPOSED_PII+anonymize": ("ANONYMIZE_RECORD", "VERIFY_RECORD_ANONYMIZED"),
+    "REPORT_ACTIVE_DATA_FLOW": ("DISABLE_DATA_FLOW", "VERIFY_DATA_FLOW_DISABLED"),
+    "REPORT_RESTORE_RISK": ("BLOCK_RESTORE", "VERIFY_RESTORE_BLOCKED"),
+}
+
+
+def step(op: str, resource: str = "r_1", system: str = "s_service", evidence: str | None = None) -> dict[str, Any]:
+    spec = OPERATIONS[op]
+    if evidence is None:
+        evidence = "evidence_1" if spec.phase == "FINDING" else ""
+    return {"phase": spec.phase, "system_id": system, "resource_id": resource, "operation": op, "state": spec.state,
+            "evidence_id": evidence}
+
+
+def numbered(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = sorted(steps, key=lambda s: canonical_sort_key(s["operation"], s["system_id"], s["resource_id"]))
+    return [{**s, "step_no": i} for i, s in enumerate(ordered, start=1)]
+
+
+@pytest.mark.parametrize("kind", sorted(PAIRINGS))
+def test_each_finding_remediation_verification_chain_is_accepted(kind: str) -> None:
+    remediation, verification = PAIRINGS[kind]
+    finding = kind.split("+")[0]
+    check([row("case_1", "INCOMPLETE", numbered([step(finding), step(remediation), step(verification)]))], ["case_1"])
+
+
+def test_a_finding_without_its_remediation_is_rejected() -> None:
+    with pytest.raises(ContractViolation, match="finding_has_remediation"):
+        check([row("case_1", "INCOMPLETE", numbered([step("REPORT_REMAINING_RECORD")]))], ["case_1"])
+    # the remediation exists, but on another resource
+    steps = numbered([step("REPORT_REMAINING_RECORD"), step("DELETE_RECORD", "r_2"), step("VERIFY_RECORD_ABSENT", "r_2")])
+    with pytest.raises(ContractViolation, match="finding_has_remediation"):
+        check([row("case_1", "INCOMPLETE", steps)], ["case_1"])
+    # an exposed-PII finding is not closed by a delete
+    steps = numbered([step("REPORT_EXPOSED_PII"), step("DELETE_RECORD"), step("VERIFY_RECORD_ABSENT")])
+    with pytest.raises(ContractViolation, match="finding_has_remediation"):
+        check([row("case_1", "INCOMPLETE", steps)], ["case_1"])
+
+
+def test_a_remediation_without_its_verification_is_rejected() -> None:
+    steps = numbered([step("REPORT_REMAINING_RECORD"), step("DELETE_RECORD")])
+    with pytest.raises(ContractViolation, match="remediation_has_verification"):
+        check([row("case_1", "INCOMPLETE", steps)], ["case_1"])
+
+
+def test_step_no_must_be_an_int_not_a_float_or_bool() -> None:
+    good = numbered([step("REPORT_REMAINING_RECORD"), step("DELETE_RECORD"), step("VERIFY_RECORD_ABSENT")])
+    for bad_no in (1.0, True, "1", None):
+        steps = [{**good[0], "step_no": bad_no}, *good[1:]]
+        with pytest.raises(ContractViolation, match="step_no"):
+            check([row("case_1", "INCOMPLETE", steps)], ["case_1"])
+
+
+@pytest.mark.parametrize("bad_value", [[], {}, None, 7, ["DELETE_RECORD"]])
+@pytest.mark.parametrize("field", ["operation", "phase", "system_id", "resource_id", "state", "evidence_id"])
+def test_a_mistyped_field_is_a_violation_never_a_type_error(field: str, bad_value: Any) -> None:
+    good = numbered([step("REPORT_REMAINING_RECORD"), step("DELETE_RECORD"), step("VERIFY_RECORD_ABSENT")])
+    steps = [{**good[0], field: bad_value}, *good[1:]]
+    with pytest.raises(ContractViolation, match="field_type"):
+        check([row("case_1", "INCOMPLETE", steps)], ["case_1"])
