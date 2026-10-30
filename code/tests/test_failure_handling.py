@@ -71,3 +71,18 @@ def test_three_consecutive_provider_failures_stop_the_queue(tmp_path: Any, monke
     queue = [Target("case_1", "PICK", "account_900", i, 1.0, "t") for i in range(5)]
     adjustments, done, unreached = run_queue(LLMSkepticAgent(replay, base_world()), queue, Budget(50))
     assert [d.outcome for d in done] == ["ERROR"] * 3 and unreached == 2 and adjustments == {}
+
+
+def test_incomplete_with_no_steps_is_valid_only_on_the_flagged_fallback_path() -> None:
+    empty = row("case_1", "INCOMPLETE", [])
+    validate_output(
+        OUTPUT_COLUMNS, [empty], expected_case_ids=["case_1"], audit_at={"case_1": AUDIT},
+        evidence_times={}, fallback_cases={"case_1"},
+    )
+    with pytest.raises(ContractViolation, match="steps_nonempty"):
+        check([empty], ["case_1"])
+    with pytest.raises(ContractViolation, match="steps_nonempty"):
+        validate_output(
+            OUTPUT_COLUMNS, [row("case_1", "COMPLETE", [])], expected_case_ids=["case_1"],
+            audit_at={"case_1": AUDIT}, evidence_times={}, fallback_cases={"case_1"},
+        )

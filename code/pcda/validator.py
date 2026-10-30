@@ -10,7 +10,7 @@ REDACT or ANONYMIZE.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -62,6 +62,7 @@ def validate_row(
     audit_at: datetime | None,
     evidence_times: Mapping[str, datetime],
     lineage: LineageGraph | None = None,
+    fallback_cases: Collection[str] = (),
 ) -> list[Violation]:
     case_id = row.get("case_id", "?")
     out: list[Violation] = []
@@ -88,7 +89,10 @@ def validate_row(
             bad("not_applicable_empty", "NOT_APPLICABLE must have steps_json=[]")
         return out
     if not steps:
-        bad("steps_nonempty", f"{status} with no steps")
+        # INCOMPLETE with no steps is allowed only on the flagged fallback path
+        # (fallback_no_provable_obligation): deletion was requested, nothing is provable.
+        if not (status == STATUS_INCOMPLETE and case_id in fallback_cases):
+            bad("steps_nonempty", f"{status} with no steps")
         return out
 
     for i, s in enumerate(steps, start=1):
@@ -181,8 +185,13 @@ def validate_output(
     audit_at: Mapping[str, datetime],
     evidence_times: Mapping[str, datetime],
     lineage: LineageGraph | None = None,
+    fallback_cases: Collection[str] = (),
 ) -> None:
-    """Raise ContractViolation listing every problem; return None when the output is valid."""
+    """Raise ContractViolation listing every problem; return None when the output is valid.
+
+    `fallback_cases` are the case_ids flagged fallback_no_provable_obligation: the only rows that may be
+    INCOMPLETE with steps_json=[].
+    """
     violations: list[Violation] = []
     if tuple(header) != OUTPUT_COLUMNS:
         violations.append(Violation("*", "columns", f"header {list(header)}"))
@@ -203,7 +212,9 @@ def validate_output(
     for r in rows:
         cid = r.get("case_id", "")
         violations.extend(
-            validate_row(r, audit_at=audit_at.get(cid), evidence_times=evidence_times, lineage=lineage)
+            validate_row(
+                r, audit_at=audit_at.get(cid), evidence_times=evidence_times, lineage=lineage, fallback_cases=fallback_cases
+            )
         )
     if violations:
         raise ContractViolation(violations)

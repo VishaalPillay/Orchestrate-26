@@ -100,9 +100,9 @@ def test_absence_cites_latest_non_vacuous_covering_snapshot() -> None:
     cert = solve(case(), DELETION, "user_04", [res("account_004")], store, TEMPLATES, LineageGraph([]),
                  full_store=store, resolver=CategoryResolver(None))
     # No fact names account_004, so its category comes from nothing: unknown, flagged.
-    assert cert.verdict is Verdict.NOT_APPLICABLE
+    assert cert.verdict is Verdict.INCOMPLETE  # deletion was requested; completion cannot be proven
     assert "category_unknown:account_004" in cert.flags
-    assert "fallback_no_provable_obligation" in cert.flags  # nothing provable: the NOT_APPLICABLE fallback
+    assert "fallback_no_provable_obligation" in cert.flags  # nothing provable: the INCOMPLETE fallback
 
     full = FactStore(list(store) + [fact("ev_old:1", "account_004", FactKind.LINK, "2026-01-01T00:00:00Z",
                                          table="customer_profiles")])
@@ -161,3 +161,21 @@ def test_guard_with_existence_but_no_state_is_open_risk() -> None:
     cert = solve(case(), DELETION, "user_x", [res("backup_9287", "backup_service")], empty, TEMPLATES,
                  LineageGraph([]), full_store=store, resolver=CategoryResolver(None))
     assert cert.obligations[0].status is ObligationStatus.UNKNOWN
+
+
+def test_fallback_is_incomplete_with_no_steps_and_not_applicable_stays_an_intake_outcome() -> None:
+    """Deletion requested, nothing provable: INCOMPLETE, flagged, no steps. Only intake yields NOT_APPLICABLE."""
+    store = FactStore([]).as_of(AUDIT)
+    resolver = CategoryResolver(None)
+    cert = solve(case(), DELETION, "user_07", [res("object_19", "object_storage")], store, TEMPLATES, LineageGraph([]),
+                 full_store=store, resolver=resolver)
+    assert cert.verdict is Verdict.INCOMPLETE
+    assert "fallback_no_provable_obligation" in cert.flags
+    assert not any(o.status is ObligationStatus.OPEN for o in cert.obligations)
+    assert project(cert, store, AUDIT) == []
+
+    refusal = IntakeResult("case_x", False, "en", "ACCESS")
+    cert = solve(case(), refusal, "user_07", [res("object_19", "object_storage")], store, TEMPLATES, LineageGraph([]),
+                 full_store=store, resolver=resolver)
+    assert cert.verdict is Verdict.NOT_APPLICABLE
+    assert "fallback_no_provable_obligation" not in cert.flags

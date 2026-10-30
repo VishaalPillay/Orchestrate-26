@@ -17,7 +17,7 @@ On the 32 public samples (`python code/evaluation/score.py --diff`; gold is read
 | Exact ordered sequences | 29/32 |
 | Custom evaluation overlays | 8/8 |
 
-The 3 missed steps (`audit_record_6645`, `audit_record_5569`, `account_004`) appear in no participant file. The evaluation set: 518 rows (354 INCOMPLETE, 153 COMPLETE, 11 NOT_APPLICABLE), validated before writing. Limits are listed honestly in the evaluation report.
+The 3 missed steps (`audit_record_6645`, `audit_record_5569`, `account_004`) appear in no participant file. The evaluation set: 518 rows (355 INCOMPLETE, 153 COMPLETE, 10 NOT_APPLICABLE), validated before writing. Limits are listed honestly in the evaluation report.
 
 ## Setup
 

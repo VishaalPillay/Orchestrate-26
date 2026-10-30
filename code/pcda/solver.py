@@ -33,6 +33,9 @@ from pcda.identity import AttributedResource
 from pcda.lineage import LineageGraph
 from pcda.policy import ObligationTemplate
 
+# Set on an INCOMPLETE certificate whose request authorizes deletion but has no provable obligation.
+FALLBACK_FLAG: Final = "fallback_no_provable_obligation"
+
 
 class ObligationStatus(str, Enum):
     DISCHARGED = "DISCHARGED"
@@ -268,7 +271,9 @@ def solve(
     elif any(o.status is ObligationStatus.DISCHARGED for o in obligations):
         verdict = Verdict.COMPLETE
     else:
-        # Nothing provable either way: no contract-valid COMPLETE or INCOMPLETE row exists.
-        verdict = Verdict.NOT_APPLICABLE
-        flags.append("fallback_no_provable_obligation")
+        # The request authorizes deletion but nothing is provable either way. Completion cannot be proven
+        # (burden of proof), so the case is INCOMPLETE, not NOT_APPLICABLE, which is an intake outcome only.
+        # No obligation is open, so there is no finding to cite and the planner emits no steps.
+        verdict = Verdict.INCOMPLETE
+        flags.append(FALLBACK_FLAG)
     return Certificate(case.case_id, subject, tuple(obligations), verdict, tuple(flags))

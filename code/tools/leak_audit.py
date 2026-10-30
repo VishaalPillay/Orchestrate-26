@@ -42,7 +42,7 @@ LEAK: dict[str, tuple[str, str]] = {
     "post_audit_rejected": ("recall", "a candidate with no fact observed and no activity row at or before audit_at"),
     "perception_drop": ("recall", "a screenshot record dropped by grounding"),
     "perception_skipped": ("recall", "an image with no cached transcription"),
-    "fallback_no_provable_obligation": ("recall", "nothing provable: written as NOT_APPLICABLE"),
+    "fallback_no_provable_obligation": ("recall", "nothing provable: written as INCOMPLETE with no steps"),
     "activity_pick_refused": ("recall if wrong", "an activity pick refused by exclusivity (precision guard)"),
     "category_conflict": ("precision", "two record names resolve to different categories; one was chosen"),
     "intake_ambiguous": ("precision", "request text defaulted to deletion"),

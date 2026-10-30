@@ -28,6 +28,7 @@ from pcda.contract import OUTPUT_COLUMNS
 from pcda.llm.client import RunMode
 from pcda.pipeline import CaseResult, Context, build_context, run_case
 from pcda.planner import serialize_steps
+from pcda.solver import FALLBACK_FLAG
 from pcda.validator import ContractViolation, validate_output
 
 BLAST_MAX_VERDICTS = config.BLAST_MAX_VERDICTS
@@ -102,6 +103,10 @@ def print_canonical_systems(ctx: Context) -> None:
         print(f"  {prefix:<16} all targets={vote.all_targets} -> {vote.system_id}")
 
 
+def fallback_cases(results: list[CaseResult]) -> set[str]:
+    return {r.certificate.case_id for r in results if FALLBACK_FLAG in r.certificate.flags}
+
+
 def print_split_summary(name: str, cases: list[CaseRequest], results: list[CaseResult]) -> None:
     by_id = {c.case_id: c for c in cases}
     verdicts = Counter(r.certificate.verdict.value for r in results)
@@ -122,9 +127,9 @@ def print_split_summary(name: str, cases: list[CaseRequest], results: list[CaseR
             f"    {r.certificate.case_id} {list(r.intake_evidence)} text={r.intake.request_kind} "
             f"{'CONFLICT' if conflict else 'agrees'}"
         )
-    fallback = [r.certificate.case_id for r in results if "fallback_no_provable_obligation" in r.certificate.flags]
+    fallback = sorted(fallback_cases(results))
     if fallback:
-        print(f"[{name}] fallback NOT_APPLICABLE (no provable obligation): {fallback}")
+        print(f"[{name}] fallback INCOMPLETE (deletion requested, no provable obligation): {fallback}")
 
 
 def write_flags(path: Path, results: list[CaseResult]) -> None:
@@ -196,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
                 audit_at={c.case_id: c.audit_at for c in cases},
                 evidence_times=evidence_times,
                 lineage=ctx.lineage,
+                fallback_cases=fallback_cases(results),
             )
             target = paths.OUTPUT_CSV if source == paths.DELETION_REQUESTS else paths.RUNS_DIR / "sample_output.csv"
             if (
@@ -229,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
                 audit_at={c.case_id: c.audit_at for c in selected},
                 evidence_times=evidence_times,
                 lineage=ctx.lineage,
+                fallback_cases=fallback_cases(results),
             )
             write_rows(args.out, rows)
             write_flags(args.out.with_suffix(".flags.json"), results)

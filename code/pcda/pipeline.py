@@ -34,7 +34,7 @@ from pcda.llm.ledger import TokenLedger
 from pcda.planner import Step, order_steps, project
 from pcda.policy import ObligationTemplate, compile_rules
 from pcda.runclock import RunClock, account_anchors, learn
-from pcda.solver import Certificate, ObligationStatus, Verdict, solve
+from pcda.solver import FALLBACK_FLAG, Certificate, ObligationStatus, Verdict, solve
 
 # Account and analytics rows are linked with the learned run clock (band, phase) and the matching rule; env switch for ablations.
 USE_RUN_CLOCK = os.environ.get("PCDA_NO_RUN_CLOCK") != "1"
@@ -42,7 +42,7 @@ USE_RUN_CLOCK = os.environ.get("PCDA_NO_RUN_CLOCK") != "1"
 # Activity rows that may link a resource to a request when nothing else does.
 # (event_type, target_system, fallback_only, build options). A fallback_only pass
 # is used only when the case would otherwise have no provable obligation at all
-# (the NOT_APPLICABLE fallback). One-sided analytics stays fallback-only: on the
+# (the INCOMPLETE fallback). One-sided analytics stays fallback-only: on the
 # samples it made 1 correct pick, while 3 cases with no analytics record (01, 14,
 # 31) reached a single candidate and were stopped only because another case
 # contested it. A two-sided analytics pass (the row also forced to the request)
@@ -56,7 +56,6 @@ JOINT_PASSES: tuple[tuple[str, str, bool], ...] = (
     *((("ANONYMIZE_RECORD", "analytics_platform", False),) if USE_RUN_CLOCK else ()),
     ("ANONYMIZE_RECORD", "analytics_platform", True),
 )
-FALLBACK_FLAG = "fallback_no_provable_obligation"
 
 
 @dataclass

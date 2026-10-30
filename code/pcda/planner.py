@@ -99,6 +99,10 @@ def _complete_verify_op(ob: Obligation) -> str:
 def project(certificate: Certificate, store: FactStore, audit_at: datetime) -> list[Step]:
     if certificate.verdict is Verdict.NOT_APPLICABLE:
         return []
+    if certificate.verdict is Verdict.INCOMPLETE and not any(
+        ob.status is ObligationStatus.OPEN for ob in certificate.obligations
+    ):
+        return []  # the fallback: completion cannot be proven, but no finding can be cited
     steps: dict[tuple[int, str, str], Step] = {}
 
     def put(s: Step) -> None:
