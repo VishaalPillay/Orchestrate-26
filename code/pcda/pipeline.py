@@ -109,7 +109,7 @@ def build_context(mode: RunMode) -> Context:
     closure = IdentityClosure.from_csvs(paths.USER_IDENTITIES, paths.USER_AUDIT_LOG)
     lineage = LineageGraph.from_csv(paths.SYSTEM_ACTIVITY)
     activity_prefixes = frozenset(resource_prefix(c.resource_id) for c in lineage.claims)
-    adapters = build_adapters(LLMPerceptionAgent(llm), mode, report, activity_prefixes)
+    adapters = build_adapters(LLMPerceptionAgent(llm), mode, report, activity_prefixes, lineage.file_name_links())
     store = ingest_all(read_manifest(), adapters, report)
     deterministic = mode is RunMode.DETERMINISTIC
     # Built over every request in both files, so a case's answer never depends on --split.

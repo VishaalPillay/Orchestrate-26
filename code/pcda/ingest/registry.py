@@ -23,6 +23,7 @@ def build_adapters(
     mode: RunMode,
     report: IngestReport,
     known_prefixes: frozenset[str] = frozenset(),
+    file_links: dict[str, tuple[tuple[str, str], ...]] | None = None,
 ) -> dict[str, Adapter]:
     """`known_prefixes`: resource-id prefixes from system_activity, for image grounding."""
     return {
@@ -31,7 +32,7 @@ def build_adapters(
         ".sql": SqlAdapter(report),
         ".txt": TxtAdapter(report),
         ".pdf": PdfAdapter(perception, mode, report),
-        ".png": ImageAdapter(perception, mode, report, known_prefixes),
+        ".png": ImageAdapter(perception, mode, report, known_prefixes, file_links=file_links or {}),
     }
 
 

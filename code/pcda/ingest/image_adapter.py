@@ -98,6 +98,7 @@ class ImageAdapter:
     known_prefixes: frozenset[str] = frozenset()
     text_store: FactStore | None = None
     known_systems: frozenset[str] = frozenset()
+    file_links: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     screens: dict[str, PerceivedScreen] = field(default_factory=dict)
 
     def bind_text_store(self, store: FactStore, extra_prefixes: frozenset[str] = frozenset()) -> None:
@@ -118,7 +119,7 @@ class ImageAdapter:
             self.report.warnings.append(f"{row.file_id}: image skipped, no facts emitted: {reason}")
             return []
         self.screens[row.file_id] = screen
-        return ground_screen(screen, row, self.report, self.known_prefixes, self.known_systems)
+        return ground_screen(screen, row, self.report, self.known_prefixes, self.known_systems, self.file_links)
 
     def cross_check(self, image_facts: list[Fact]) -> None:
         """Flag image records whose identifiers disagree with text facts about the same resource."""
@@ -146,6 +147,7 @@ def ground_screen(
     report: IngestReport,
     known_prefixes: frozenset[str],
     known_systems: frozenset[str] = frozenset(),
+    file_links: dict[str, tuple[tuple[str, str], ...]] | None = None,
 ) -> list[Fact]:
     """Turn a transcription into Facts; drop records that fail grounding."""
     em = Emitter(row, report, src=SRC_PERCEPTION)
@@ -165,6 +167,21 @@ def ground_screen(
                 report.warnings.append(f"{row.file_id}: record {n} resource_id {rid or None!r} -> {found[0]} (only id transcribed)")
                 rid = found[0]
                 m = _RESOURCE_ID.match(rid)
+        if (not m or m.group(1) not in known_prefixes) and file_links:
+            # No id-shaped value: a record named by its exact file name (case-sensitive, with extension)
+            # is that file's resource only when exactly one catalog row maps a resource to the name.
+            names = sorted({v.strip() for v in [rid, *rec.fields.values()] if v.strip() in file_links})
+            if len(names) == 1 and len(file_links[names[0]]) == 1:
+                activity_id, rid = file_links[names[0]][0]
+                m = _RESOURCE_ID.match(rid)
+                report.warnings.append(
+                    f"{row.file_id}: record {n} joined by file name {names[0]!r} -> {rid} ({activity_id})"
+                )
+            elif names:
+                report.warnings.append(
+                    f"{row.file_id}: record {n} file name {names} matches {sum(len(file_links[x]) for x in names)} "
+                    "catalog rows or names; dropped"
+                )
         if not m or m.group(1) not in known_prefixes:
             report.warnings.append(f"{row.file_id}: record {n} dropped, resource_id {rid or None!r} is not a known pattern")
             continue

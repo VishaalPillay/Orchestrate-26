@@ -32,6 +32,9 @@ class Claim:
     details: str
 
 
+LINKED_FILE: Final = re.compile(r"\b([a-z]+(?:_[a-z]+)*_\d+) \(([^()\s]+\.[A-Za-z0-9]{2,5})\)")
+
+
 class LineageGraph:
     def __init__(self, claims: list[Claim]) -> None:
         self._claims = sorted(claims, key=lambda c: (c.event_time, c.activity_id))
@@ -91,6 +94,21 @@ class LineageGraph:
     def affects(self, guard_resource_id: str, resource_id: str, t: datetime) -> bool:
         """True if the flow/backup guard_resource_id can copy or recreate resource_id at t."""
         return resource_id in self.reachable(guard_resource_id, t)
+
+    def file_name_links(self) -> dict[str, tuple[tuple[str, str], ...]]:
+        """Exact file name -> ((activity_id, resource_id), ...) from LINK_RESOURCE_IDENTITY rows.
+
+        A catalog row such as "Attachment catalog confirmed object_19 (delivery_confirmation_19.pdf) belongs
+        only to ..." says which resource a named file is. Only a parenthesised name with a file extension counts.
+        """
+        out: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for c in self._claims:
+            if c.event_type != "LINK_RESOURCE_IDENTITY":
+                continue
+            for resource_id, name in LINKED_FILE.findall(c.details):
+                if resource_id == c.resource_id:
+                    out[name].append((c.activity_id, resource_id))
+        return {name: tuple(rows) for name, rows in sorted(out.items())}
 
     def canonical_systems(self) -> dict[str, SystemVote]:
         """resource-id prefix -> the system that owns resources with that prefix.

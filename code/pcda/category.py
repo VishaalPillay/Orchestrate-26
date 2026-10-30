@@ -139,6 +139,14 @@ INFERRED_FROM_EVIDENCE: Final[dict[tuple[str, str], tuple[str, str]]] = {
         "SECONDARY_IDENTIFIER",
         "deletion-marker probe of the contact-index entry; gold case_10 DELETE",
     ),
+    # case_61, activity_4007: "Attachment catalog confirmed object_19 (delivery_confirmation_19.pdf) belongs
+    # only to <subject> and user_07; no other subject is linked." The catalog row itself names the record an
+    # attachment and states rule_06's condition verbatim ("Attachment belongs only to the deletion subject").
+    # The id prefix object_ and the target system object_storage name no category; the row's text does.
+    ("catalog:attachment", ""): (
+        "SUPPORT_ATTACHMENT",
+        "attachment-catalog row stating the file belongs only to the subject (rule_06); no gold involved",
+    ),
 }
 
 # (name, signal) -> category. signal "" means "no qualifying field".
@@ -229,6 +237,7 @@ class CategoryResolver:
         """
         pooled: dict[tuple[int, str], frozenset[str]] = {}
         facts_list = list(facts)
+        claims = list(claims)
 
         def add(rank: int, name: str, signals: frozenset[str]) -> None:
             pooled[(rank, name)] = pooled.get((rank, name), frozenset()) | signals
@@ -268,6 +277,14 @@ class CategoryResolver:
             seen.add(cat)
             if decided is None:
                 decided, decided_rank, source = cat, rank, f"rank{rank}:{name}"
+        if decided is None and any(
+            c.event_type == "LINK_RESOURCE_IDENTITY" and c.details.startswith("Attachment catalog") for c in claims
+        ):
+            # The catalog row's own text names the record (evidence semantics, static, before any model).
+            cat = self.resolve("catalog:attachment")
+            if cat is not None:
+                seen.add(cat)
+                decided, decided_rank, source = cat, 2, "catalog:attachment"
         if decided is None and unknown:
             # Static map silent for every fact name: ask the LLM (model modes only),
             # in precedence order, before falling back to activity target systems.
