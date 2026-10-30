@@ -129,7 +129,7 @@ def print_split_summary(name: str, cases: list[CaseRequest], results: list[CaseR
         )
     fallback = sorted(fallback_cases(results))
     if fallback:
-        print(f"[{name}] fallback INCOMPLETE (deletion requested, no provable obligation): {fallback}")
+        print(f"[{name}] fallback_no_provable_obligation (INCOMPLETE with no steps; validation will fail): {fallback}")
 
 
 def write_flags(path: Path, results: list[CaseResult]) -> None:
@@ -201,7 +201,6 @@ def main(argv: list[str] | None = None) -> int:
                 audit_at={c.case_id: c.audit_at for c in cases},
                 evidence_times=evidence_times,
                 lineage=ctx.lineage,
-                fallback_cases=fallback_cases(results),
             )
             target = paths.OUTPUT_CSV if source == paths.DELETION_REQUESTS else paths.RUNS_DIR / "sample_output.csv"
             if (
@@ -235,7 +234,6 @@ def main(argv: list[str] | None = None) -> int:
                 audit_at={c.case_id: c.audit_at for c in selected},
                 evidence_times=evidence_times,
                 lineage=ctx.lineage,
-                fallback_cases=fallback_cases(results),
             )
             write_rows(args.out, rows)
             write_flags(args.out.with_suffix(".flags.json"), results)

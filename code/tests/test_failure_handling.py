@@ -73,16 +73,9 @@ def test_three_consecutive_provider_failures_stop_the_queue(tmp_path: Any, monke
     assert [d.outcome for d in done] == ["ERROR"] * 3 and unreached == 2 and adjustments == {}
 
 
-def test_incomplete_with_no_steps_is_valid_only_on_the_flagged_fallback_path() -> None:
-    empty = row("case_1", "INCOMPLETE", [])
-    validate_output(
-        OUTPUT_COLUMNS, [empty], expected_case_ids=["case_1"], audit_at={"case_1": AUDIT},
-        evidence_times={}, fallback_cases={"case_1"},
-    )
-    with pytest.raises(ContractViolation, match="steps_nonempty"):
-        check([empty], ["case_1"])
-    with pytest.raises(ContractViolation, match="steps_nonempty"):
-        validate_output(
-            OUTPUT_COLUMNS, [row("case_1", "COMPLETE", [])], expected_case_ids=["case_1"],
-            audit_at={"case_1": AUDIT}, evidence_times={}, fallback_cases={"case_1"},
-        )
+def test_incomplete_with_no_steps_is_rejected_unconditionally() -> None:
+    """The solver's fallback_no_provable_obligation (INCOMPLETE, no steps) must fail loudly, never be written."""
+    for status in ("INCOMPLETE", "COMPLETE"):
+        with pytest.raises(ContractViolation, match="steps_nonempty"):
+            check([row("case_1", status, [])], ["case_1"])
+    check([row("case_1", "NOT_APPLICABLE", [])], ["case_1"])  # the only status that may be empty

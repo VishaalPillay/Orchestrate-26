@@ -75,3 +75,41 @@ def test_attachment_catalog_row_decides_the_category_before_any_model() -> None:
     assert res.category == "SUPPORT_ATTACHMENT" and res.source == "catalog:attachment"
     plain = link("a2", "object_19", "Data catalog linked object_19 (x.pdf) to x@y.z and user_07.")
     assert CategoryResolver(None).resolve_resource(facts, [plain]).category is None
+
+
+def test_a_catalog_row_naming_another_user_never_gives_the_resource_to_this_subject(tmp_path) -> None:
+    """The join maps a file name to a resource and carries no identifier; ownership still follows the catalog row.
+
+    The screenshot record joins object_19, but the row says the file belongs to other@example.com (user_2), so a
+    request from user_1 does not attribute it, and user_2's request does.
+    """
+    from pcda.cases import CaseRequest
+    from pcda.facts import FactStore
+    from pcda.identity import IdentityClosure, ResourceAttribution
+
+    (tmp_path / "i.csv").write_text(
+        "user_id,name,email,phone,email_hash,updated_at\n"
+        "user_1,A,a@example.com,+1 555 000 1111,,2025-01-01T00:00:00Z\n"
+        "user_2,B,other@example.com,+1 555 000 2222,,2025-01-01T00:00:00Z\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "a.csv").write_text("audit_id,user_id,event_time,field_name,old_value,new_value\n", encoding="utf-8")
+    closure = IdentityClosure.from_csvs(tmp_path / "i.csv", tmp_path / "a.csv")
+    row_for_other = link(
+        "activity_1", "object_19",
+        "Attachment catalog confirmed object_19 (delivery_confirmation_19.pdf) belongs only to other@example.com and user_2; "
+        "no other subject is linked.",
+    )
+    lineage = LineageGraph([row_for_other])
+    facts, _ = ground(named("delivery_confirmation_19.pdf"), lineage.file_name_links())
+    assert [f.resource_id for f in facts] == ["object_19"]  # the join itself is user-agnostic
+    store = FactStore(facts)
+
+    def case(email: str) -> CaseRequest:
+        return CaseRequest("case_x", email, parse_ts("2026-02-11T05:00:00Z"), "COMPLETE", parse_ts("2026-02-12T23:00:00Z"),
+                           parse_ts("2026-02-14T10:00:00Z"), "delete")
+
+    mine = ResourceAttribution.for_case(case("a@example.com"), "user_1", closure, store, lineage)
+    theirs = ResourceAttribution.for_case(case("other@example.com"), "user_2", closure, store, lineage)
+    assert [a.resource_id for a in mine] == []
+    assert [a.resource_id for a in theirs] == ["object_19"]
