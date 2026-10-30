@@ -26,6 +26,14 @@ from typing import Final
 ACTIVITY_WINDOW: Final = timedelta(minutes=15)
 
 # --- LLM client -----------------------------------------------------------------------------------
+# Model names (not secrets). The environment variable of the same name overrides the default. The defaults are the
+# models that produced the cached answers, so a clean checkout without .env reproduces the cache keys in replay.
+MODEL_DEFAULTS: Final[dict[str, str]] = {
+    "INTAKE_MODEL": "gemini-3.5-flash-lite",
+    "CATEGORY_MODEL": "gemini-3.5-flash-lite",
+    "PERCEPTION_MODEL": "gemini-3.6-flash",
+    "SKEPTIC_MODEL": "gemini-3.5-flash-lite",
+}
 LLM_MAX_ATTEMPTS: Final = 3  # per call, honoring Retry-After
 LLM_TIMEOUT_S_DEFAULT: Final = "120"  # LLM_TIMEOUT_S overrides
 LLM_RPM_LIMIT_DEFAULT: Final = "10"  # LLM_RPM_LIMIT overrides

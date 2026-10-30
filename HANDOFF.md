@@ -31,7 +31,8 @@ Reproduce (no provider calls):
 - **Iteration 21** (`27692cf`): the same clock links identifier-less analytics rows through the case's account row (per-template windows and residues). Samples F1 0.976 -> 0.992; test +53 analytics steps, 0 verdict changes. The old unanchored analytics pass stays as the NOT_APPLICABLE fallback.
 - Everything learned is printed by `main.py` and comes from the 238 evaluation requests whose account is linked by identifiers; `sample_output.csv` is read only by `score.py` (`test_runclock.py::test_pipeline_never_opens_sample_output_csv`).
 - `PCDA_NO_RUN_CLOCK=1` switches the clock off for ablations.
-- New tools: `clock_validation.py`, `clock_spotcheck.py`, `usage_report.py`.
+- New tools: `clock_validation.py`, `clock_spotcheck.py`, `usage_report.py`, `package_zip.py`.
+- Shipping check found that a checkout without `.env` missed the perception cache (the cache key includes the model name, which only `.env` set), turning 5 cases NOT_APPLICABLE. The model names are now defaults in `config.MODEL_DEFAULTS`; a clean unzip plus `dataset/` replays byte-identically without `.env`.
 
 ## Known misses and limits (details in the evaluation report)
 

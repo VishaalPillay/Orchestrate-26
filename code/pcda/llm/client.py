@@ -59,7 +59,7 @@ class LLMRequest:
 
     @property
     def model(self) -> str:
-        model = os.environ.get(self.model_env, "").strip()
+        model = os.environ.get(self.model_env, "").strip() or config.MODEL_DEFAULTS.get(self.model_env, "")
         if not model:
             raise LLMUnavailable(f"{self.task}: {self.model_env} is not set")
         return model
