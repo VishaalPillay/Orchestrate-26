@@ -1,3 +1,5 @@
+Historical recon notes; the throwaway scripts were removed after use.
+
 # Recon findings: eight questions on the dataset
 
 All scripts are in `code/tools/recon/` (`ev.py` normalizes evidence, `textidx.py` indexes text, the `qN*.py` files answer individual questions). Nothing else was built. I viewed all 11 PNGs by eye, since no OCR is available.

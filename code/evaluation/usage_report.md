@@ -6,8 +6,8 @@ so the **billed cost is $0.00**. The cost columns are *estimates at assumed list
 - `gemini-3.5-flash-lite`: $0.30 per 1M input tokens, $2.50 per 1M output tokens
 - `gemini-3.6-flash`: $1.50 per 1M input tokens, $9.00 per 1M output tokens
 
-The rates are assumptions (third-party listings; no `gemini-3.6-flash` rate was found, so the `gemini-3.5-flash` rate
-is used as an upper bound), not provider-verified. Change `PRICES` in `code/tools/usage_report.py` and rerun it to reprice.
+The rates are assumptions, not provider-verified: the `gemini-3.5-flash-lite` rate is a third-party listing, and the
+`gemini-3.6-flash` rate is assumed (no published rate found). Change `PRICES` in `code/tools/usage_report.py` and rerun it to reprice.
 
 ## 1. The final full-dataset run
 
@@ -33,11 +33,11 @@ The evaluation requests need no skeptic call (budget 0, iteration 13).
 
 | Task | Provider | Model | Provider calls | Cache hits | Input tokens | Output tokens | Est. cost |
 |---|---|---|---|---|---|---|---|
-| category.fallback | gemini | gemini-3.5-flash-lite | 4 | 92 | 2,367 | 136 | $0.0011 |
-| intake.batch | gemini | gemini-3.5-flash-lite | 28 | 1391 | 40,194 | 50,752 | $0.1389 |
-| perception.image | gemini | gemini-3.6-flash | 11 | 2482 | 19,617 | 10,694 | $0.1257 |
-| skeptic | gemini | gemini-3.5-flash-lite | 79 | 351 | 187,689 | 2,669 | $0.0630 |
-| **Total** | | | **122** | **4316** | **249,867** | **64,251** | **$0.3286** (priced models) |
+| category.fallback | gemini | gemini-3.5-flash-lite | 4 | 96 | 2,367 | 136 | $0.0011 |
+| intake.batch | gemini | gemini-3.5-flash-lite | 28 | 1447 | 40,194 | 50,752 | $0.1389 |
+| perception.image | gemini | gemini-3.6-flash | 11 | 2625 | 19,617 | 10,694 | $0.1257 |
+| skeptic | gemini | gemini-3.5-flash-lite | 79 | 471 | 187,689 | 2,669 | $0.0630 |
+| **Total** | | | **122** | **4639** | **249,867** | **64,251** | **$0.3286** (priced models) |
 
 Per request over 550: 571.1 tokens (454.3 in, 116.8 out), $0.000598. Over the 518 evaluation requests: 606.4 tokens, $0.000634. Cache-hit counts are cumulative over every run in the ledger.
 The category rows include the 2 calls of the LLM-only experiment of iteration 12a; the perception row includes one retry.
@@ -49,13 +49,13 @@ discarded attempts, the Groq fallback runs, the skeptic's test-split run (iterat
 
 | Task | Provider | Model | Provider calls | Cache hits | Input tokens | Output tokens | Est. cost |
 |---|---|---|---|---|---|---|---|
-| category.fallback | gemini | gemini-3.5-flash-lite | 4 | 92 | 2,367 | 136 | $0.0011 |
-| intake.batch | gemini | gemini-3.5-flash-lite | 28 | 1391 | 40,194 | 50,752 | $0.1389 |
+| category.fallback | gemini | gemini-3.5-flash-lite | 4 | 96 | 2,367 | 136 | $0.0011 |
+| intake.batch | gemini | gemini-3.5-flash-lite | 28 | 1447 | 40,194 | 50,752 | $0.1389 |
 | intake.batch | groq | openai/gpt-oss-120b | 28 | 0 | 39,752 | 46,352 | unpriced |
-| perception.image | gemini | gemini-3.6-flash | 11 | 2482 | 19,617 | 10,694 | $0.1257 |
+| perception.image | gemini | gemini-3.6-flash | 11 | 2625 | 19,617 | 10,694 | $0.1257 |
 | perception.image | gemini | gemini-3.8-flash | 12 | 59 | 18,925 | 14,912 | unpriced |
-| skeptic | gemini | gemini-3.5-flash-lite | 503 | 1255 | 1,046,590 | 16,636 | $0.3556 |
+| skeptic | gemini | gemini-3.5-flash-lite | 503 | 1375 | 1,046,590 | 16,636 | $0.3556 |
 | skeptic | groq | openai/gpt-oss-120b | 55 | 0 | 86,429 | 4,478 | unpriced |
-| **Total** | | | **641** | **5279** | **1,253,874** | **143,960** | **$0.6212** (priced models) |
+| **Total** | | | **641** | **5602** | **1,253,874** | **143,960** | **$0.6212** (priced models) |
 
 Recorded provider errors (quota, timeouts, malformed answers; no tokens billed): 363.

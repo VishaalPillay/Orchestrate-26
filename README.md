@@ -29,7 +29,7 @@ python -m venv .venv
 # .venv/bin/python -m pip install -r code/requirements.txt          # macOS / Linux
 ```
 
-`dataset/` must sit at the repository root. Model providers are optional (see "Run modes"); replay needs neither a key nor a `.env`, because the model names that produced the cache are defaults in `code/pcda/config.py` (`MODEL_DEFAULTS`). Their settings come only from the environment or an uncommitted `.env` (names only, never values, are in the code): `LLM_PROVIDERS`, `<NAME>_BASE_URL`, `<NAME>_API_KEY`, `INTAKE_MODEL`, `CATEGORY_MODEL`, `PERCEPTION_MODEL`, `SKEPTIC_MODEL`, `GROQ_FALLBACK_MODEL`, `LLM_RPM_LIMIT`, `LLM_DISABLE_THINKING`, `LLM_TIMEOUT_S`.
+Runtime dependencies are only `python-dotenv`, `openai` and `pymupdf` (pinned in `code/requirements.txt`); tests and linters are in `code/requirements-dev.txt`. `dataset/` must sit at the repository root. Model providers are optional (see "Run modes"); replay needs neither a key nor a `.env`, because the model names that produced the cache are defaults in `code/pcda/config.py` (`MODEL_DEFAULTS`). Their settings come only from the environment or an uncommitted `.env` (names only, never values, are in the code): `LLM_PROVIDERS`, `<NAME>_BASE_URL`, `<NAME>_API_KEY`, `INTAKE_MODEL`, `CATEGORY_MODEL`, `PERCEPTION_MODEL`, `SKEPTIC_MODEL`, `GROQ_FALLBACK_MODEL`, `LLM_RPM_LIMIT`, `LLM_DISABLE_THINKING`, `LLM_TIMEOUT_S`.
 
 ## Run
 

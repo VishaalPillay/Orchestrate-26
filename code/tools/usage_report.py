@@ -28,7 +28,7 @@ FINAL_SKEPTIC_FROM = "2026-10-25T08"
 
 # USD per 1M tokens (input, output). ASSUMED reference rates, not read from a provider:
 #   gemini-3.5-flash-lite  0.30 / 2.50  third-party calculator listing dated 2026-07-24 (trevorfox.com)
-#   gemini-3.6-flash       1.50 / 9.00  no rate found; the gemini-3.5-flash rate (morphllm.com, June 2026) as an upper bound
+#   gemini-3.6-flash       1.50 / 9.00  assumed (no published rate found); borrowed from the gemini-3.5-flash listing (morphllm.com, June 2026)
 # openai/gpt-oss-120b (Groq) answered only discarded fallback runs and is left unpriced.
 PRICES: dict[str, tuple[float, float]] = {
     "gemini-3.5-flash-lite": (0.30, 2.50),
@@ -105,8 +105,8 @@ def main() -> int:
         "",
         *[f"- `{m}`: ${a:.2f} per 1M input tokens, ${b:.2f} per 1M output tokens" for m, (a, b) in PRICES.items()],
         "",
-        "The rates are assumptions (third-party listings; no `gemini-3.6-flash` rate was found, so the `gemini-3.5-flash` rate",
-        "is used as an upper bound), not provider-verified. Change `PRICES` in `code/tools/usage_report.py` and rerun it to reprice.",
+        "The rates are assumptions, not provider-verified: the `gemini-3.5-flash-lite` rate is a third-party listing, and the",
+        "`gemini-3.6-flash` rate is assumed (no published rate found). Change `PRICES` in `code/tools/usage_report.py` and rerun it to reprice.",
         "",
         "## 1. The final full-dataset run",
         "",
