@@ -12,6 +12,7 @@ from pcda.ingest.base import IngestReport, ManifestRow
 from pcda.ingest.image_adapter import ground_screen
 from pcda.llm.cache import DiskCache
 from pcda.llm.client import (
+    Attachment,
     CacheMiss,
     LLMClient,
     LLMRequest,
@@ -150,3 +151,29 @@ def test_misplaced_resource_id_is_adopted_only_when_unique():
     assert [f.resource_id for f in facts] == ["search_77"]
     assert any("only id transcribed" in w for w in report.warnings)
     assert any("record 2 dropped" in w for w in report.warnings)  # two candidates: not guessed
+
+
+def test_cache_hits_an_identical_request_and_misses_a_changed_prompt_model_schema_or_image(tmp_path, monkeypatch):
+    base = LLMRequest(task="t", prompt="p", model_env="TEST_MODEL", system="s",
+                      schema={"type": "object", "required": ["records"]}, attachments=(Attachment("image/png", b"png-1"),))
+    provider = FakeProvider("a", ['{"records": []}'])
+    client(tmp_path, RunMode.LIVE, [provider]).complete(base)
+    replay = client(tmp_path, RunMode.REPLAY, [])
+    assert replay.complete(base).cached  # identical request: hit
+    same = LLMRequest(task="other task name", prompt="p", model_env="TEST_MODEL", system="s",
+                      schema={"required": ["records"], "type": "object"}, attachments=(Attachment("image/png", b"png-1"),))
+    assert replay.complete(same).cached  # task label and key order do not matter
+    changed = {
+        "prompt": LLMRequest(task="t", prompt="p2", model_env="TEST_MODEL", system="s", schema=base.schema, attachments=base.attachments),
+        "system": LLMRequest(task="t", prompt="p", model_env="TEST_MODEL", system="s2", schema=base.schema, attachments=base.attachments),
+        "schema": LLMRequest(task="t", prompt="p", model_env="TEST_MODEL", system="s", schema={"type": "object", "required": ["x"]}, attachments=base.attachments),
+        "image": LLMRequest(task="t", prompt="p", model_env="TEST_MODEL", system="s", schema=base.schema, attachments=(Attachment("image/png", b"png-2"),)),
+    }
+    for what, req in changed.items():
+        with pytest.raises(CacheMiss):
+            replay.complete(req)
+        assert what
+    monkeypatch.setenv("TEST_MODEL", "fake-model-2")  # a changed model is a miss too
+    with pytest.raises(CacheMiss):
+        replay.complete(base)
+    assert provider.calls == 1

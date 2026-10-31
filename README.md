@@ -21,7 +21,7 @@ The 3 missed steps (`audit_record_6645`, `audit_record_5569`, `account_004`) app
 
 ## Setup
 
-Python 3.13 (the version used; no 3.13-only features are intended).
+Python 3.13 is the tested runtime: every test, replay and check was run on 3.13.4. `code/ruff.toml` sets `target-version = "py311"`, which is only a syntax and lint target for ruff, not a tested runtime; other Python versions are untested.
 
 ```bash
 python -m venv .venv

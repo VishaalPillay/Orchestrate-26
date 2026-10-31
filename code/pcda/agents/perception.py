@@ -1,4 +1,8 @@
-"""Perception agent: reads screenshots (and unusable PDF text layers).
+"""Perception agent: reads screenshots (PNG).
+
+Screenshot perception is implemented (`extract_image`, one call per image, cached). Reading a PDF whose text layer is
+unusable is not wired: `extract_text` raises NotImplementedError and `ingest/pdf_adapter.py` skips such a file and
+records it as SkippedEvidence (all four PDFs in the dataset have a usable pymupdf text layer, so none is skipped).
 
 It returns raw transcriptions only. Code in the adapters turns a transcribed
 record into a Fact after grounding it: the resource_id must match a known
@@ -61,9 +65,14 @@ class PerceivedScreen:
 
 
 class PerceptionAgent(Protocol):
-    def extract_image(self, path: Path, row: ManifestRow) -> PerceivedScreen: ...
+    def extract_image(self, path: Path, row: ManifestRow) -> PerceivedScreen:
+        """Implemented: transcribe one screenshot."""
+        ...
 
-    def extract_text(self, text: str, row: ManifestRow) -> list[RawObservation]: ...
+    def extract_text(self, text: str, row: ManifestRow) -> list[RawObservation]:
+        """Interface for the unusable-PDF-text-layer fallback. Not implemented and not wired: `LLMPerceptionAgent`
+        raises NotImplementedError and `PdfAdapter` never calls it (it skips such a PDF instead)."""
+        ...
 
 
 def _strs(value: Any) -> tuple[str, ...]:
@@ -143,4 +152,5 @@ class LLMPerceptionAgent:
         )
 
     def extract_text(self, text: str, row: ManifestRow) -> list[RawObservation]:
+        """Not implemented (see the module docstring); nothing calls it."""
         raise NotImplementedError("perception.LLMPerceptionAgent.extract_text")
