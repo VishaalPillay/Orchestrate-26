@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 from pcda import config, paths
 from pcda.agents.skeptic_run import SkepticRun, blast_radius, exceeds_blast_limit, run_skeptic, write_audit
 from pcda.cases import SPLIT_NAMES, CaseRequest, load_evidence_times, load_requests, split_sources
+from pcda.citations import CitationChecker
 from pcda.contract import OUTPUT_COLUMNS
 from pcda.llm.client import RunMode
 from pcda.pipeline import CaseResult, Context, build_context, run_case
@@ -91,6 +93,39 @@ def write_rows(path: Path, rows: list[dict[str, str]]) -> None:
         w = csv.DictWriter(fh, fieldnames=list(OUTPUT_COLUMNS))
         w.writeheader()
         w.writerows(rows)
+
+
+def check_citations(ctx: Context, results: list[CaseResult]) -> None:
+    """Stop before writing when a cited evidence id does not mention the step's resource (invariant 1)."""
+    checker = CitationChecker.build(ctx.store, ctx.lineage)
+    violations = [
+        v
+        for r in results
+        for v in checker.violations(r.certificate.case_id, r.certificate.verdict, r.certificate.subject, r.steps)
+    ]
+    if violations:
+        raise ContractViolation(violations)
+
+
+def commit_outputs(pending: list[tuple[Path, list[dict[str, str]]]]) -> None:
+    """Write every pending output to a temp file next to its target, then replace the targets.
+
+    Called only after every selected split passed validation, so a failure in a later split never leaves
+    an earlier output replaced by a half-finished run.
+    """
+    temps: list[tuple[Path, Path]] = []
+    try:
+        for target, rows in pending:
+            tmp = target.with_name(target.name + ".tmp")
+            temps.append((tmp, target))  # registered first, so a failed write is cleaned up too
+            write_rows(tmp, rows)
+        for tmp, target in temps:
+            os.replace(tmp, target)
+    finally:
+        for tmp, _ in temps:
+            tmp.unlink(missing_ok=True)
+    for target, rows in pending:
+        print(f"wrote {len(rows)} rows -> {target}")
 
 
 def print_canonical_systems(ctx: Context) -> None:
@@ -172,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         if ctx.clock is not None:
             print(chr(10).join(ctx.clock.describe()))
         selected: list[CaseRequest] = []
+        pending: list[tuple[Path, list[dict[str, str]]]] = []  # validated outputs, written together at the end
         for source in split_sources(args.split):
             cases = load_requests(source)
             if args.case:
@@ -202,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                 evidence_times=evidence_times,
                 lineage=ctx.lineage,
             )
+            check_citations(ctx, results)
             target = paths.OUTPUT_CSV if source == paths.DELETION_REQUESTS else paths.RUNS_DIR / "sample_output.csv"
             if (
                 blast is not None
@@ -218,8 +255,8 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 3
-            write_rows(target, rows)
-            print(f"wrote {len(rows)} rows -> {target}")
+            pending.append((target, rows))
+        commit_outputs(pending)
         if args.case:
             missing = sorted(set(args.case) - {c.case_id for c in selected})
             if missing:
@@ -235,9 +272,9 @@ def main(argv: list[str] | None = None) -> int:
                 evidence_times=evidence_times,
                 lineage=ctx.lineage,
             )
-            write_rows(args.out, rows)
+            check_citations(ctx, results)
+            commit_outputs([(args.out, rows)])
             write_flags(args.out.with_suffix(".flags.json"), results)
-            print(f"wrote {len(rows)} rows -> {args.out}")
         if not overlay:
             ctx.ledger.write(paths.RUNS_DIR / f"usage_{args.split}_{mode.value}.json")
     except NotImplementedError as exc:

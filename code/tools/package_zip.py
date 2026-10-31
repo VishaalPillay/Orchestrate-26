@@ -16,11 +16,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SKIP_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "venv", "node_modules", ".git"}
 SKIP_SUFFIXES = {".zip", ".tar", ".gz", ".tgz", ".7z", ".rar", ".pyc"}
-SKIP_NAMES = {".env", ".DS_Store"}
+SKIP_NAMES = {".DS_Store"}  # plus every ".env" and ".env.*" file, see wanted()
 SKIP_TREES = {Path("code/.cache/runs")}
 
 
 def wanted(rel: Path) -> bool:
+    if rel.name == ".env" or rel.name.startswith(".env."):
+        return False
     if any(part in SKIP_DIRS for part in rel.parts) or rel.name in SKIP_NAMES or rel.suffix in SKIP_SUFFIXES:
         return False
     return not any(tree in rel.parents or rel == tree for tree in SKIP_TREES)

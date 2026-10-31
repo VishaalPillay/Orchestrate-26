@@ -316,6 +316,8 @@ def run_case(case: CaseRequest, ctx: Context, adjust: bool = True) -> CaseResult
             ctx.lineage,
             full_store=ctx.store,
             resolver=ctx.resolver,
+            # Deterministic mode has no category fallback, so an unresolved name there is expected and only flagged.
+            block_unproven_complete=ctx.mode is not RunMode.DETERMINISTIC,
         )
 
     certificate = solve_with(attributions)

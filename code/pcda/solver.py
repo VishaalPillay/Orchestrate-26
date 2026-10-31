@@ -209,6 +209,7 @@ def solve(
     *,
     full_store: FactStore,
     resolver: CategoryResolver,
+    block_unproven_complete: bool = True,
 ) -> Certificate:
     """Build obligations for every attributed resource and active flow/restore path,
     discharge them from `store` (already as_of audit_at), and derive the verdict.
@@ -236,6 +237,8 @@ def solve(
             flags.append(f"category_content:{res.resource_id}:{cat.category}:{cat.source[8:]}")
         if cat.category is None:
             flags.append(f"category_unknown:{res.resource_id}")
+            if any(not f.is_coverage for f in store.by_resource(res.resource_id)):
+                flags.append(f"unresolved_evidenced:{res.resource_id}")
             continue
         template = templates[cat.category]
         reading, fact, via_coverage = resource_state(res, template, store)
@@ -270,6 +273,13 @@ def solve(
         verdict = Verdict.INCOMPLETE
     elif any(o.status is ObligationStatus.DISCHARGED for o in obligations):
         verdict = Verdict.COMPLETE
+        unproven = [f for f in flags if f.startswith(("retained_missing:", "unresolved_evidenced:"))]
+        if unproven and block_unproven_complete:
+            # COMPLETE needs every relevant record treated and every retained record present. A retained record
+            # that is missing, or an evidenced resource with no category, is not proven either way: INCOMPLETE
+            # with no steps, which the validator rejects, so the run stops instead of writing it.
+            verdict = Verdict.INCOMPLETE
+            flags.append(f"complete_unprovable:{','.join(unproven)}")
     else:
         # The request authorizes deletion but nothing is provable either way. Completion cannot be proven
         # (burden of proof), so the case is INCOMPLETE, not NOT_APPLICABLE, which is an intake outcome only.

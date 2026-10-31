@@ -148,3 +148,61 @@ def test_a_mistyped_field_is_a_violation_never_a_type_error(field: str, bad_valu
     steps = [{**good[0], field: bad_value}, *good[1:]]
     with pytest.raises(ContractViolation, match="field_type"):
         check([row("case_1", "INCOMPLETE", steps)], ["case_1"])
+
+
+# --- reverse pairing, row field types, atomic output, zip hygiene (iteration 25) -----------------------------
+
+
+def test_a_remediation_without_its_finding_is_rejected() -> None:
+    orphan = numbered([step("REPORT_REMAINING_RECORD"), step("DELETE_RECORD"), step("VERIFY_RECORD_ABSENT"),
+                       step("DELETE_RECORD", "r_2"), step("VERIFY_RECORD_ABSENT", "r_2")])
+    with pytest.raises(ContractViolation, match="remediation_has_finding"):
+        check([row("case_1", "INCOMPLETE", orphan)], ["case_1"])
+    # a retained or account verification needs no finding
+    ok = numbered([step("REPORT_REMAINING_RECORD"), step("DELETE_RECORD"), step("VERIFY_RECORD_ABSENT"),
+                   step("VERIFY_RECORD_PRESENT", "audit_1", "security_service"), step("VERIFY_RECORD_ABSENT", "account_1", "account_service")])
+    check([row("case_1", "INCOMPLETE", ok)], ["case_1"])
+
+
+@pytest.mark.parametrize("bad_row", [
+    {"case_id": "case_1", "deletion_status": "INCOMPLETE", "steps_json": None},
+    {"case_id": "case_1", "deletion_status": None, "steps_json": "[]"},
+    {"case_id": "case_1", "deletion_status": "COMPLETE", "steps_json": 5},
+    {"case_id": [], "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"},
+    {"case_id": {}, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"},
+    {"deletion_status": "NOT_APPLICABLE", "steps_json": "[]"},
+])
+def test_a_mistyped_row_is_a_violation_never_a_type_error(bad_row: dict[str, Any]) -> None:
+    with pytest.raises(ContractViolation):
+        check([bad_row, row("case_2", "NOT_APPLICABLE", [])], ["case_1", "case_2"])
+
+
+def test_outputs_are_replaced_only_after_every_one_is_written(tmp_path) -> None:
+    import main as cli
+
+    a, b = tmp_path / "a.csv", tmp_path / "b.csv"
+    a.write_text("old a", encoding="utf-8")
+    b.write_text("old b", encoding="utf-8")
+    good = [{"case_id": "case_1", "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"}]
+    cli.commit_outputs([(a, good), (b, good)])
+    assert "case_1" in a.read_text(encoding="utf-8") and "case_1" in b.read_text(encoding="utf-8")
+    assert not list(tmp_path.glob("*.tmp"))
+    # a failure while writing the second file leaves both targets as they were and no temp file behind
+    a.write_text("keep a", encoding="utf-8")
+    b.write_text("keep b", encoding="utf-8")
+    broken = [None]  # type: ignore[list-item]
+    with pytest.raises(Exception):  # noqa: B017
+        cli.commit_outputs([(a, good), (b, broken)])
+    assert a.read_text(encoding="utf-8") == "keep a" and b.read_text(encoding="utf-8") == "keep b"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_package_zip_excludes_env_files_and_variants() -> None:
+    from pathlib import Path
+
+    from tools.package_zip import wanted
+
+    for name in (".env", ".env.local", ".env.production", ".env.example.bak"):
+        assert not wanted(Path("code") / name)
+    assert wanted(Path("code/pcda/config.py"))
+    assert not wanted(Path("code/.cache/runs/run_log.jsonl"))

@@ -92,6 +92,16 @@ REMEDIATION_VERIFICATION: Final[dict[str, str]] = {
 }
 
 
+# The same pairing seen from the remediation: it must answer a finding on the same resource.
+REMEDIATION_FINDINGS: Final[dict[str, frozenset[str]]] = {
+    "DELETE_RECORD": frozenset({"REPORT_REMAINING_RECORD"}),
+    "REDACT_RECORD": frozenset({"REPORT_EXPOSED_PII"}),
+    "ANONYMIZE_RECORD": frozenset({"REPORT_EXPOSED_PII"}),
+    "DISABLE_DATA_FLOW": frozenset({"REPORT_ACTIVE_DATA_FLOW"}),
+    "BLOCK_RESTORE": frozenset({"REPORT_RESTORE_RISK"}),
+}
+
+
 def canonical_sort_key(operation: str, system_id: str, resource_id: str) -> tuple[int, str, str]:
     """The single ordering rule for steps_json. Phases follow from operation index."""
     return (OPERATIONS[operation].index, system_id, resource_id)

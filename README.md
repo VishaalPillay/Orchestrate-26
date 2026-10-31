@@ -42,7 +42,7 @@ This writes `output.csv` at the repository root (and the sample predictions to `
 | Mode | Provider calls | Use |
 |---|---|---|
 | `replay` | never; a cache miss is an error | reproduce the submitted output |
-| `deterministic` | never; rules only, cached screenshots | model-free baseline (differs from replay in 1 row, case_45) |
+| `deterministic` | never; rules only, cached screenshots | model-free baseline (differs from replay in 1 row, case_45; unresolved categories are only flagged here) |
 | `live` | per `LLM_PROVIDERS`, cache first | refresh the cache after a prompt or data change |
 
 Useful commands:

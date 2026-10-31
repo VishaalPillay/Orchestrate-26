@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 
 from pcda import paths
 from pcda.cases import load_requests
-from pcda.facts import ATTR_LINKED, ATTR_VACUOUS
+from pcda.citations import CitationChecker
 from pcda.identity import LinkTier, normalize_email
 from pcda.llm.client import RunMode
 from pcda.pipeline import build_context, run_case
@@ -45,26 +45,8 @@ def main() -> int:
     load_dotenv(paths.ENV_FILE)  # the perception cache is keyed on PERCEPTION_MODEL
     ctx = build_context(RunMode.DETERMINISTIC)
 
-    by_evidence: dict[str, list] = defaultdict(list)
-    for f in ctx.store:
-        by_evidence[f.evidence_id].append(f)
-    with paths.USER_AUDIT_LOG.open(encoding="utf-8", newline="") as fh:
-        audit_user = {r["audit_id"]: r["user_id"] for r in csv.DictReader(fh)}
-
-    def mentions(e: str, rid: str, system: str, subject: str | None) -> bool:
-        claim = ctx.lineage.claim(e)
-        if claim is not None:
-            return claim.resource_id == rid or rid in claim.details
-        if e in audit_user:
-            return audit_user[e] == subject
-        for f in by_evidence.get(e, []):
-            if f.resource_id == rid or f.attrs.get(ATTR_LINKED) == rid:
-                return True
-            if f.is_coverage and f.attrs.get(ATTR_VACUOUS) != "true":
-                systems = {s for s in f.attrs.get("systems", "").split(",") if s}
-                if f.system_id == system or system in systems:
-                    return True
-        return False
+    checker = CitationChecker.build(ctx.store, ctx.lineage)
+    mentions = checker.mentions
 
     splits = {"test": load_requests(paths.DELETION_REQUESTS), "sample": load_requests(paths.SAMPLE_REQUESTS)}
     v1: list[str] = []

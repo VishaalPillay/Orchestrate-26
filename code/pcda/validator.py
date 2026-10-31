@@ -24,6 +24,7 @@ from pcda.contract import (
     PHASE_VERIFICATION,
     PHASES,
     RECORD_CHANGE_OPERATIONS,
+    REMEDIATION_FINDINGS,
     REMEDIATION_VERIFICATION,
     STATUS_COMPLETE,
     STATUS_INCOMPLETE,
@@ -71,8 +72,14 @@ def validate_row(
     out: list[Violation] = []
 
     def bad(check: str, message: str) -> None:
-        out.append(Violation(case_id, check, message))
+        out.append(Violation(case_id if isinstance(case_id, str) else repr(case_id), check, message))
 
+    # Types before any parse or set operation: a malformed row is a violation, never a TypeError.
+    mistyped = [k for k in OUTPUT_COLUMNS if not isinstance(row.get(k), str)]
+    for k in mistyped:
+        bad("row_field_type", f"{k} is {type(row.get(k)).__name__}, not a string")
+    if mistyped:
+        return out
     status = row.get("deletion_status", "")
     if status not in STATUSES:
         bad("status_enum", f"deletion_status {status!r}")
@@ -148,6 +155,8 @@ def validate_row(
             on = (s["system_id"], s["resource_id"])
             if s["operation"] in FINDING_REMEDIATIONS and not any((r, *on) in planned for r in FINDING_REMEDIATIONS[s["operation"]]):
                 bad("finding_has_remediation", f"step {i} {s['operation']} on {on[1]} has no {'/'.join(sorted(FINDING_REMEDIATIONS[s['operation']]))}")
+            if s["operation"] in REMEDIATION_FINDINGS and not any((f, *on) in planned for f in REMEDIATION_FINDINGS[s["operation"]]):
+                bad("remediation_has_finding", f"step {i} {s['operation']} on {on[1]} has no {'/'.join(sorted(REMEDIATION_FINDINGS[s['operation']]))}")
             if s["operation"] in REMEDIATION_VERIFICATION and (REMEDIATION_VERIFICATION[s["operation"]], *on) not in planned:
                 bad("remediation_has_verification", f"step {i} {s['operation']} on {on[1]} has no {REMEDIATION_VERIFICATION[s['operation']]}")
         for i, s in enumerate(steps, start=1):
@@ -204,7 +213,10 @@ def validate_output(
     violations: list[Violation] = []
     if tuple(header) != OUTPUT_COLUMNS:
         violations.append(Violation("*", "columns", f"header {list(header)}"))
-    ids = [r.get("case_id", "") for r in rows]
+    for r in rows:
+        if not isinstance(r.get("case_id"), str):
+            violations.append(Violation(repr(r.get("case_id")), "row_field_type", "case_id is not a string"))
+    ids = [r["case_id"] for r in rows if isinstance(r.get("case_id"), str)]
     if ids != sorted(ids):
         violations.append(Violation("*", "sorted", "rows not sorted by case_id"))
     if len(ids) != len(set(ids)):
@@ -214,12 +226,16 @@ def validate_output(
         violations.append(Violation(missing, "row_present", "no output row"))
     for extra in sorted(set(ids) - expected):
         violations.append(Violation(extra, "row_expected", "row for unknown case_id"))
-    if len(rows) != len(expected_case_ids):
+    if len(ids) != len(rows):
+        violations.append(Violation("*", "row_count", f"{len(rows) - len(ids)} row(s) without a string case_id"))
+    elif len(rows) != len(expected_case_ids):
         violations.append(
             Violation("*", "row_count", f"{len(rows)} rows, expected {len(expected_case_ids)}")
         )
     for r in rows:
         cid = r.get("case_id", "")
+        if not isinstance(cid, str):
+            continue  # already reported above
         violations.extend(
             validate_row(r, audit_at=audit_at.get(cid), evidence_times=evidence_times, lineage=lineage)
         )
