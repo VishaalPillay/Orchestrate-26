@@ -14,7 +14,9 @@ The rates are assumptions, not provider-verified: the `gemini-3.5-flash-lite` ra
 `python code/main.py --mode live --split all` (`LLM_PROVIDERS=gemini`) wrote the committed `output.csv`. The intake,
 category, perception and skeptic answers were already in the disk cache, so the run made only the provider calls
 below: 3 skeptic calls that re-ran one target left unfinished by the previous run. `--mode replay` reproduces the
-same `output.csv` byte for byte with 0 provider calls.
+same `output.csv` byte for byte with 0 provider calls. The final run made only 3 calls because every other answer was
+already cached, so its token count is not the cost of the solution: section 2 (about 571 tokens and about $0.0006 per
+request, over 550 requests) is the real cost basis.
 
 | Provider | Model | Provider calls | Cache hits | Input tokens | Output tokens | Est. cost |
 |---|---|---|---|---|---|---|

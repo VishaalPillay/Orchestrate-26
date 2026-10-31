@@ -7,9 +7,9 @@ python code/main.py --mode deterministic --split all
 python code/evaluation/score.py --diff
 ```
 
-Current (iteration 23): step P 1.000 / R 0.984 / F1 0.992, status 32/32, evidence 190/190 on matched steps, 29/32 exact sequences. Evaluation set: 518 rows pass the validator (355 INCOMPLETE, 153 COMPLETE, 10 NOT_APPLICABLE, all 10 from intake; the flagged no-provable-obligation fallback of iteration 22 applies to 0 rows).
+Current (iteration 25): step P 1.000 / R 0.984 / F1 0.992, status 32/32, evidence 190/190 on matched steps, 29/32 exact sequences. Evaluation set: 518 rows pass the validator (355 INCOMPLETE, 153 COMPLETE, 10 NOT_APPLICABLE, all 10 from intake; the flagged no-provable-obligation fallback of iteration 22 applies to 0 rows).
 
-Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` is written by `--mode replay` from the cache of the last live run (`code/.cache/llm/`): iterations 15 to 19 added no model call, so replay has zero cache misses, and the sample skeptic replays 60 of 60 calls. A confirming `--mode live` run after these iterations is still to be done; it should make 0 provider calls. Model stages: screenshot perception, LLM intake, the category fallback, and the skeptic on the samples. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row (case_45) and scores the same on samples.
+Step metrics match steps as a multiset on `(phase, system_id, resource_id, operation, state)`. Exact matches mean the whole ordered `steps_json`, evidence included, equals gold. The committed `output.csv` is written by `--mode replay` from the cache of the last live run (`code/.cache/llm/`): iterations 15 to 25 added no model call that replay needs beyond the cache, so replay has zero cache misses, and the sample skeptic replays 60 of 60 calls. The confirming `--mode live --split all` run (after iteration 21, `LLM_PROVIDERS=gemini`) made 3 provider calls, which re-ran one sample-skeptic target left unfinished by the previous run; replay then reproduced `output.csv` byte for byte. Iterations 22 to 25 were checked with replay only (see `usage_report.md`). Model stages: screenshot perception, LLM intake, the category fallback, and the skeptic on the samples. `--mode deterministic` (rules only, cached perception) differs in 1 evaluation row (case_45) and scores the same on samples.
 
 ## Iteration log
 
@@ -168,11 +168,11 @@ Invariants over the output:
 |---|---|
 | 1. FINDING and COMPLETE-verification evidence mentions the resource or is its covering snapshot | 0 |
 | 2. A resource in two subjects' steps is identifier-linked in both | 0 |
-| 3. Every INCOMPLETE case verifies the account | 98 test, 4 sample (all "no account attributed"). Gold has an account step in 32 of 32 sample cases; our test output has none in 144 of 507 deletion cases (28%), samples 5 of 31 |
+| 3. Every INCOMPLETE case verifies the account | 98 test, 4 sample (all "no account attributed"). Gold has an account step in 32 of 32 sample cases; our test output has none in 144 of 507 deletion cases (28%), samples 5 of 31 (the iteration 17 snapshot; iteration 20 reduced it to 52 of 507, see below) |
 | 4. Every SECURITY_AUDIT_LOG obligation gets VERIFY_RECORD_PRESENT | 0 |
 | 5. Per-system share of cases with findings, test vs samples (0.5x to 2x) | none outside except identity_service (test 0.01 vs sample 0.03, one sample case) and marketing_platform (test only, below 0.01) |
 
-Invariant 3 is the measurable recall gap the samples understate: about 144 test cases are missing their account steps. Its root cause is accounts that no evidence forces (iteration 15). Assigning them anyway would mean breaking ties by time distance, which is ruled out.
+Invariant 3 is the measurable recall gap the samples understate: at the time of this audit, 144 of 507 test deletion cases were missing their account steps; the current figure (after iteration 20) is 52 of 507, 31 of them INCOMPLETE (144 before iteration 20), the same as Honest limits. Its root cause is accounts that no evidence forces (iteration 15). Assigning them anyway would mean breaking ties by time distance, which is ruled out.
 
 **Fix kept:** the staleness gate now spares a candidate matched on the subject's `user_id`. Samples unchanged, 1 test row changed (case_34 adds `VERIFY_RECORD_PRESENT security_service/audit_record_3753`, evidence `""`, because its only fact is captured before `audit_at` but the case is INCOMPLETE). Not fixed, with reasons: the support category conflicts (no basis), case_45 in deterministic mode (live output already correct), and the 98 missing accounts (not forced).
 
@@ -315,7 +315,7 @@ gemini-3.6-flash could not be measured today: its free-tier quota was exhausted 
 - **Replay** (`--mode replay --split all`): `output.csv` and the sample output are byte-identical to the live run, with 0 provider calls and 41 cache hits.
 - **Live vs deterministic:** 1 of 518 rows differs. case_45 stays COMPLETE and gains 5 `VERIFY_RECORD_PRESENT` steps for `audit_record_001`, `002`, `004`, `005` and `006`, which only the LLM category fallback can categorize. Samples score identically in all three modes.
 
-## Remaining sample losses (iteration 19)
+## Remaining sample losses (iteration 25)
 
 3 gold steps are still missed and there are no extra steps:
 
